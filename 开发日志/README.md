@@ -54,7 +54,7 @@
 | **#4** | `75d6a43` | `feat(agent): 实现 Agent 配置、能力探测与本地缓存` | Agent 基础 | config/能力探测/capability |
 | **#5** | `6cac5a8` | `feat(web): 搭建控制台前端骨架（Cloudflare 风格，主题色 #6b37c9）` | 前端骨架 | Vue3 + TS + Element Plus + Vite |
 | **#6** | `b4a82dc` | `feat(transport): 实现注册鉴权与 gRPC 传输层（T2）` | T2 传输层 | server/internal/ca、grpcserver、session；agent/internal/register、transport、executor；删除废弃 worker/ |
-| **#7** | 待提交 | `feat(console): 实现 REST API、JWT/RBAC 与前端接通后端（T3）` | T3 控制台 | auth/command/api/web 包；前端 client/LoginView/auth store；指令下发闭环 |
+| **#7** | `81357ef` | `feat(console): 实现 REST API、JWT/RBAC 与前端接通后端（T3）` | T3 控制台 | auth/command/api/web 包；前端 client/LoginView/auth store；指令下发闭环 |
 | — | 待提交 | 测试通过 | Orange Pi 真机端到端验证 |
 
 回滚方式：`git revert <commit>` 或 `git reset --hard <编号对应 commit hash>`
