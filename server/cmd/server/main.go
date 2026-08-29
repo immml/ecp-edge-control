@@ -139,14 +139,27 @@ func main() {
 	disp := command.New(grpcSrv.Sessions(), st, log.Info)
 	engine := api.New(st, grpcSrv.Sessions(), disp, grpcSrv, log.Info)
 	engine.NoRoute(func(c *gin.Context) {
-		// 静态资源：内置前端（embed 目录名 spa），未命中则回退首页（SPA history 模式）
-		data, err := web.FS().ReadFile("spa" + c.Request.URL.Path)
-		ct := mime.TypeByExtension(filepath.Ext(c.Request.URL.Path))
-		if err != nil {
-			// 路径未命中 → 回退首页（SPA 路由由前端处理）
-			data, _ = web.FS().ReadFile("spa/index.html")
-			ct = "text/html; charset=utf-8"
+		p := c.Request.URL.Path
+		ext := filepath.Ext(p)
+		// SPA 路由（无扩展名）：回退首页，由前端 history 路由接管
+		if ext == "" || ext == ".html" {
+			data, err := web.FS().ReadFile("spa/index.html")
+			if err != nil {
+				c.Status(http.StatusInternalServerError)
+				return
+			}
+			c.Data(http.StatusOK, "text/html; charset=utf-8", data)
+			return
 		}
+		// 静态资源：存在则按扩展名返回正确 MIME；
+		// 不存在返回 404——绝不把 HTML 喂给 .js/.css 请求，否则浏览器
+		// 严格 MIME 检查会报 "Expected a JavaScript module" 且难以排查
+		data, err := web.FS().ReadFile("spa" + p)
+		if err != nil {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		ct := mime.TypeByExtension(ext)
 		if ct == "" {
 			ct = "application/octet-stream"
 		}
