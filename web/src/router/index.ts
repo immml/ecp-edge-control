@@ -34,6 +34,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '文件', hidden: true },
   },
   {
+    path: '/nodes/:id/containers',
+    name: 'containers',
+    component: () => import('@/views/ContainersView.vue'),
+    meta: { title: '容器', hidden: true },
+  },
+  {
     path: '/audit',
     name: 'audit',
     component: () => import('@/views/AuditView.vue'),

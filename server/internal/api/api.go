@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -80,6 +81,7 @@ func New(st *store.Store, sessions *session.Manager, dispatch *command.Dispatche
 		api.GET("/nodes/:id/files", h.RequireRole(model.RoleViewer), h.ListFiles)
 		api.GET("/audit", h.ListAudit)
 		api.POST("/nodes/:id/command", h.RequireRole(model.RoleOperator), h.ExecCommand)
+		api.POST("/nodes/batch/command", h.RequireRole(model.RoleOperator), h.BatchCommand)
 	}
 	return r
 }
@@ -313,7 +315,63 @@ func (h *Handler) ExecCommand(c *gin.Context) {
 	ok(c, res)
 }
 
-// ListFiles 列出节点目录内容（?path= 指定目录，默认 /）。
+// BatchCommand 向多个节点并行下发同一指令，汇总各节点结果。
+// 离线节点不阻塞整体，单独标记 offline。
+func (h *Handler) BatchCommand(c *gin.Context) {
+	var in struct {
+		NodeIDs    []string         `json:"node_ids"`
+		Type       string           `json:"type"`
+		Params     *structpb.Struct `json:"params"`
+		TimeoutSec int32            `json:"timeout_sec"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil || len(in.NodeIDs) == 0 {
+		fail(c, http.StatusBadRequest, codeParam, "node_ids 至少选择一个节点")
+		return
+	}
+	if in.Type == "" {
+		fail(c, http.StatusBadRequest, codeParam, "指令类型必填")
+		return
+	}
+	cmd := &ecpv1.Command{Type: commandType(in.Type), Params: in.Params, TimeoutSec: in.TimeoutSec}
+	uid := c.GetUint("uid")
+	username := c.GetString("username")
+
+	type item struct {
+		NodeID  string `json:"node_id"`
+		Status  string `json:"status"` // ok / failed / offline / rejected
+		Message string `json:"message"`
+		Stdout  string `json:"stdout,omitempty"`
+	}
+	results := make([]item, len(in.NodeIDs))
+	var wg sync.WaitGroup
+	for i, nodeID := range in.NodeIDs {
+		wg.Add(1)
+		go func(i int, nodeID string) {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(c.Request.Context(), 35*time.Second)
+			defer cancel()
+			res, err := h.dispatch.Dispatch(ctx, uid, username, nodeID, cmd)
+			if err != nil {
+				if err.Error() == "节点离线，无法下发指令" {
+					results[i] = item{NodeID: nodeID, Status: "offline", Message: "节点离线"}
+					return
+				}
+				results[i] = item{NodeID: nodeID, Status: "failed", Message: err.Error()}
+				return
+			}
+			st := "ok"
+			switch res.Status {
+			case ecpv1.ResultStatus_RESULT_STATUS_FAILED:
+				st = "failed"
+			case ecpv1.ResultStatus_RESULT_STATUS_REJECTED:
+				st = "rejected"
+			}
+			results[i] = item{NodeID: nodeID, Status: st, Message: res.Message, Stdout: string(res.Stdout)}
+		}(i, nodeID)
+	}
+	wg.Wait()
+	ok(c, gin.H{"total": len(results), "results": results})
+}
 func (h *Handler) ListFiles(c *gin.Context) {
 	id := c.Param("id")
 	path := c.Query("path")

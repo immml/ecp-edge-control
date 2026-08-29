@@ -3,6 +3,7 @@ package executor
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -12,23 +13,64 @@ import (
 )
 
 // dockerList 列出容器。读操作，需 CanReadDocker（能连上 docker.sock）。
+//
+// 输出结构化 JSON 数组供控制台渲染（每行一个 docker ps json 对象，转精简字段）。
 func (e *Executor) dockerList(cmd *ecpv1.Command) *ecpv1.CommandResult {
 	if !e.caps.CanReadDocker {
 		return e.needsDockerPriv(cmd, "读取容器列表需要 docker 套接字访问权限（加入 docker 组）")
 	}
 	timeout := dur(cmd.GetTimeoutSec(), 30)
-	out, err := runDocker(timeout, "ps", "-a",
-		"--format", "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.State}}\t{{.Labels}}")
+	out, err := runDocker(timeout, "ps", "-a", "--format", "json")
 	r := e.base(cmd)
-	r.Stdout = out
 	if err != nil {
 		r.Status = ecpv1.ResultStatus_RESULT_STATUS_FAILED
 		r.Message = err.Error()
 		return r
 	}
+	type rawItem struct {
+		Names  string
+		Image  string
+		Status string
+		State  string
+		Ports  string
+		Labels string
+	}
+	items := make([]map[string]string, 0)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var raw rawItem
+		if err := json.Unmarshal([]byte(line), &raw); err != nil {
+			continue // 跳过非 JSON 行（docker 版本差异），不阻塞整表
+		}
+		items = append(items, map[string]string{
+			"name":    raw.Names,
+			"image":   raw.Image,
+			"status":  raw.Status,
+			"state":   raw.State,
+			"ports":   raw.Ports,
+			"labels":  raw.Labels,
+			"managed": managedLabel(raw.Labels),
+		})
+	}
+	if data, err := json.Marshal(items); err == nil {
+		r.Stdout = data
+	}
 	r.Status = ecpv1.ResultStatus_RESULT_STATUS_OK
 	r.Message = "ok"
 	return r
+}
+
+// managedLabel 从 docker 标签串（key=value,key=value）中提取是否带 ecp.managed=true。
+func managedLabel(labels string) string {
+	for _, kv := range strings.Split(labels, ",") {
+		if strings.TrimSpace(kv) == "ecp.managed=true" {
+			return "true"
+		}
+	}
+	return ""
 }
 
 // dockerAction 对容器执行 start / stop / restart。

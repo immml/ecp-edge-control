@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Cpu, Timer, Refresh } from '@element-plus/icons-vue'
+import { Cpu, Timer, Refresh, Promotion } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import type { TableInstance } from 'element-plus'
 
-import { api, type ApiNode } from '@/api/client'
+import { api, type ApiNode, type BatchResult } from '@/api/client'
 import { mockNodes } from '@/mock/nodes'
 import { formatBytes, percent, timeAgo } from '@/utils/format'
 
@@ -14,6 +15,53 @@ const loading = ref(false)
 const usingMock = ref(false)
 
 const onlineCount = computed(() => nodes.value.filter((n) => n.status === 'online').length)
+
+// —— 批量指令 ——
+const tableRef = ref<TableInstance>()
+const selected = ref<ApiNode[]>([])
+const batchDialog = ref(false)
+const batchScript = ref('')
+const batchRunning = ref(false)
+const batchResults = ref<BatchResult[]>([])
+
+const selectedCount = computed(() => selected.value.length)
+const canBatch = computed(() => selectedCount.value > 0 && !batchRunning.value)
+
+async function runBatch() {
+  const script = batchScript.value.trim()
+  if (!script) {
+    ElMessage.warning('请先输入要执行的脚本/命令')
+    return
+  }
+  batchRunning.value = true
+  batchResults.value = []
+  try {
+    const r = await api.batchCommand(
+      selected.value.map((n) => n.id),
+      'shell',
+      { command: script },
+    )
+    batchResults.value = r.results
+    const ok = r.results.filter((x) => x.status === 'ok').length
+    ElMessage.success(`完成：${ok}/${r.results.length} 个节点成功`)
+  } catch (e: any) {
+    ElMessage.error(`批量下发失败：${e?.message || ''}`)
+  } finally {
+    batchRunning.value = false
+  }
+}
+
+function closeBatch() {
+  batchDialog.value = false
+  batchScript.value = ''
+  batchResults.value = []
+  tableRef.value?.clearSelection()
+  selected.value = []
+}
+
+function statusLabel(s: string) {
+  return { ok: '成功', failed: '失败', offline: '离线', rejected: '被拒' }[s] ?? s
+}
 
 // 远程打开节点 1Panel：直连 Tailscale IP（跨网可达），自动带安全入口
 function openPanel(n: ApiNode) {
@@ -61,14 +109,26 @@ onMounted(load)
       <div class="text-secondary" style="font-size: 13px">
         共 {{ nodes.length }} 个节点，{{ onlineCount }} 个在线
         <el-tag v-if="usingMock" size="small" type="warning" style="margin-left: 8px">示例数据</el-tag>
+        <el-tag v-if="selectedCount" size="small" type="primary" style="margin-left: 8px">已选 {{ selectedCount }}</el-tag>
       </div>
-      <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
+      <div style="display: flex; gap: 8px">
+        <el-button :icon="Promotion" :disabled="!canBatch" @click="batchDialog = true">
+          批量指令<span v-if="selectedCount"> ({{ selectedCount }})</span>
+        </el-button>
+        <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
+      </div>
     </div>
 
     <div class="node-grid">
       <div v-for="node in nodes" :key="node.id" class="node-card">
         <div class="node-card-head">
           <div class="node-name">
+            <el-checkbox
+              v-model="selected"
+              :value="node"
+              :disabled="node.status !== 'online'"
+              style="margin-right: 8px"
+            />
             <span class="status-dot" :class="node.status === 'online' ? 'is-online' : 'is-offline'" />
             {{ node.hostname || node.id }}
           </div>
@@ -146,6 +206,9 @@ onMounted(load)
 
         <div class="node-actions">
           <el-button size="small" @click="openPanel(node)">1Panel</el-button>
+          <el-button size="small" :disabled="node.status !== 'online'" @click="router.push(`/nodes/${node.id}/containers`)">
+            容器
+          </el-button>
           <el-button size="small" :disabled="node.status !== 'online'" @click="router.push(`/nodes/${node.id}/terminal`)">
             终端
           </el-button>
@@ -156,6 +219,45 @@ onMounted(load)
         </div>
       </div>
     </div>
+
+    <!-- 批量指令对话框 -->
+    <el-dialog v-model="batchDialog" title="批量下发指令" width="680px" :close-on-click-modal="false" @closed="batchResults = []">
+      <div class="text-secondary" style="font-size: 13px; margin-bottom: 10px">
+        目标节点：<el-tag v-for="n in selected" :key="n.id" size="small" style="margin-right: 6px">{{ n.hostname || n.id }}</el-tag>
+      </div>
+      <el-input
+        v-model="batchScript"
+        type="textarea"
+        :rows="7"
+        placeholder="输入要批量执行的命令，如：uptime 或多行脚本（每个节点以普通用户身份执行）"
+        :disabled="batchRunning"
+      />
+      <div v-if="batchResults.length" style="margin-top: 14px">
+        <div style="font-weight: 600; font-size: 13px; margin-bottom: 8px">执行结果</div>
+        <el-table :data="batchResults" size="small" max-height="300">
+          <el-table-column label="节点" min-width="120">
+            <template #default="{ row }">{{ row.node_id }}</template>
+          </el-table-column>
+          <el-table-column label="状态" width="90">
+            <template #default="{ row }">
+              <el-tag :type="row.status === 'ok' ? 'success' : row.status === 'offline' ? 'info' : 'danger'" size="small">
+                {{ statusLabel(row.status) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="message" label="信息" min-width="160" show-overflow-tooltip />
+          <el-table-column prop="stdout" label="输出（截断）" min-width="200" show-overflow-tooltip>
+            <template #default="{ row }">{{ (row.stdout || '').slice(0, 200) }}</template>
+          </el-table-column>
+        </el-table>
+      </div>
+      <template #footer>
+        <el-button @click="closeBatch">关闭</el-button>
+        <el-button type="primary" :loading="batchRunning" :disabled="!batchScript.trim()" @click="runBatch">
+          下发执行
+        </el-button>
+      </template>
+    </el-dialog>
 
     <div class="card" style="margin-top: 20px">
       <div class="card-header">

@@ -97,6 +97,9 @@ function openPanel() {
       </span>
       <span class="text-secondary" style="font-size: 12px">{{ node.id }}</span>
       <span style="flex: 1"></span>
+      <el-button size="small" :disabled="!online" @click="router.push(`/nodes/${nodeId}/containers`)">容器</el-button>
+      <el-button size="small" :disabled="!online" @click="router.push(`/nodes/${nodeId}/terminal`)">终端</el-button>
+      <el-button size="small" :disabled="!online" @click="router.push(`/nodes/${nodeId}/files`)">文件</el-button>
       <el-button size="small" :disabled="!node.tailscale_ip" @click="openPanel">1Panel</el-button>
       <el-button size="small" :icon="'Refresh'" :loading="loading" @click="load">刷新</el-button>
     </div>

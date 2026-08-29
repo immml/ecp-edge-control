@@ -95,6 +95,30 @@ export interface NodeDetail {
   telemetry: TelemetrySample | null
 }
 
+export interface BatchResult {
+  node_id: string
+  status: 'ok' | 'failed' | 'offline' | 'rejected'
+  message: string
+  stdout?: string
+}
+
+export interface ContainerInfo {
+  name: string
+  image: string
+  status: string
+  state: string
+  ports: string
+  labels: string
+  managed: string
+}
+
+export interface CommandResult {
+  status: string
+  message: string
+  stdout: string
+  privilege_hint?: string
+}
+
 class ApiClient {
   private base = '/'
 
@@ -166,8 +190,23 @@ class ApiClient {
     return this.request('GET', `api/v1/audit${q}`)
   }
 
-  async execCommand(nodeId: string, type: string, params?: Record<string, unknown>): Promise<unknown> {
-    return this.request('POST', `api/v1/nodes/${nodeId}/command`, { type, params })
+  async execCommand(nodeId: string, type: string, params?: Record<string, unknown>): Promise<CommandResult> {
+    const r = await this.request<CommandResult>('POST', `api/v1/nodes/${nodeId}/command`, { type, params })
+    // protojson 把 bytes 字段（stdout）序列化为 base64，这里统一还原为 UTF-8 文本
+    if (r && typeof r.stdout === 'string' && r.stdout) {
+      try {
+        const bin = atob(r.stdout)
+        const bytes = Uint8Array.from(bin, (ch) => ch.charCodeAt(0))
+        r.stdout = new TextDecoder('utf-8').decode(bytes)
+      } catch {
+        // 已是明文（如 server 侧直接 string 化的场景），保留原值
+      }
+    }
+    return r
+  }
+
+  async batchCommand(nodeIds: string[], type: string, params?: Record<string, unknown>): Promise<{ total: number; results: BatchResult[] }> {
+    return this.request('POST', 'api/v1/nodes/batch/command', { node_ids: nodeIds, type, params })
   }
 
   logout() {
