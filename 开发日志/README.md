@@ -56,6 +56,7 @@
 | **#6** | `b4a82dc` | `feat(transport): 实现注册鉴权与 gRPC 传输层（T2）` | T2 传输层 | server/internal/ca、grpcserver、session；agent/internal/register、transport、executor；删除废弃 worker/ |
 | **#7** | `81357ef` | `feat(console): 实现 REST API、  JWT/RBAC 与前端接通后端（T3）` | T3 控制台 | auth/command/api/web 包；前端 client/LoginView/auth store；指令下发闭环 |
 | **#8** | `203cfa1` | `feat(agent): 实现 Agent 真实执行器（Shell + Docker，能力分级）` | T4-A 执行器 | executor 改写：SHELL 真实执行 + 提权降级；Docker list/action/logs 能力门控 + 标签隔离；单元测试通过 |
+| **#9** | `e00fdcf` | `feat(agent,server): 指标采集 + 告警引擎 + 飞书推送（B+C）` | T4-B/C | collector(gopsutil) + alert(阈值/离线规则 + 飞书机器人) + server 遥测落 SQLite；Webhook 走 env ECP_FEISHU_WEBHOOK |
 | — | 待提交 | 测试通过 | Orange Pi 真机端到端验证 |
 
 回滚方式：`git revert <commit>` 或 `git reset --hard <编号对应 commit hash>`
