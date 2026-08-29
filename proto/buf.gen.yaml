@@ -1,0 +1,13 @@
+version: v2
+plugins:
+  # 生成消息类型（使用本地已安装的插件，不依赖 buf.build 远程插件）
+  - local: protoc-gen-go
+    out: gen
+    opt:
+      - paths=source_relative
+  # 生成 gRPC 服务存根
+  - local: protoc-gen-go-grpc
+    out: gen
+    opt:
+      - paths=source_relative
+      - require_unimplemented_servers=false

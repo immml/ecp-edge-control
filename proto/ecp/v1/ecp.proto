@@ -1,0 +1,295 @@
+syntax = "proto3";
+
+package ecp.v1;
+
+option go_package = "ecp.dev/ecp/proto/gen/ecp/v1;ecpv1";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+// ============================================================
+// 边缘计算节点控制平台 · 控制面 <-> 数据面 通信契约
+//
+// 设计约束：
+//   1. 控制面按需上线，节点常在线自治 —— 所有流必须能从任一侧重建
+//   2. 全程 mTLS，节点 ID 与证书 CN 绑定
+//   3. 终端 / 文件 / 端口转发 三种业务复用同一条 Tunnel 流
+// ============================================================
+
+service AgentService {
+  // 节点注册：用注册 Key + 硬件指纹换取客户端证书
+  // 首次绑定后，重装 / 重连走同一接口自动完成重认证，无需人工审批
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+
+  // 双向流：Agent 上报心跳与执行结果，控制面下发指令与配置
+  rpc CommandStream(stream AgentMessage) returns (stream ControlMessage);
+
+  // 通用字节流隧道：SSH 终端、文件传输、1Panel 端口转发全部复用
+  rpc Tunnel(stream TunnelChunk) returns (stream TunnelChunk);
+
+  // 控制面离线期间节点本地缓存数据的补传
+  rpc UploadBacklog(BacklogRequest) returns (BacklogResponse);
+}
+
+// ============================================================
+// 注册
+// ============================================================
+
+message NodeInfo {
+  string hostname = 1;
+  string arch = 2;              // amd64 / arm64
+  string os = 3;                // linux
+  string os_version = 4;        // debian 12 (bookworm)
+  string kernel = 5;            // 5.10.160-rockchip
+  string agent_version = 6;
+  string tailscale_ip = 7;
+  string machine_id = 8;        // /etc/machine-id
+  repeated string mac_addrs = 9;
+}
+
+// 能力探测结果：Agent 启动时上报，控制面据此决定哪些功能可用、
+// 哪些需要降级为"生成脚本 + 人工 sudo"
+message CapabilityReport {
+  bool can_read_system_stats = 1;
+  bool can_terminal = 2;              // 可开 pty
+  bool can_manage_files = 3;
+  bool can_read_docker = 4;           // 可读 docker socket
+  bool can_write_docker = 5;          // 在 docker 组内
+  bool can_manage_tailscale = 6;      // 通常需 root
+  bool can_manage_network = 7;        // iptables / nftables，需 root
+  bool can_manage_systemd = 8;        // 需 root
+  bool can_self_upgrade = 9;          // 对安装目录可写
+  bool can_read_net_config = 10;      // 可读取网卡 / DNS / hosts
+  int32 run_as_uid = 11;
+  string run_as_user = 12;
+  repeated string missing_tools = 13; // 缺失的外部命令，如 tailscale / docker
+}
+
+message RegisterRequest {
+  string registration_key = 1;
+  string fingerprint = 2;   // sha256(machine_id + board_serial + mac)，全小写 hex
+  bytes csr = 3;            // PEM 格式证书签名请求，私钥不出节点
+  NodeInfo node_info = 4;
+  CapabilityReport capabilities = 5;
+}
+
+enum RegisterReason {
+  REGISTER_REASON_UNSPECIFIED = 0;
+  REGISTER_REASON_FIRST_BIND = 1;             // Key 首次绑定指纹
+  REGISTER_REASON_REAUTH = 2;                 // 重装 / 重连，自动重认证
+  REGISTER_REASON_KEY_REVOKED = 3;            // Key 已吊销
+  REGISTER_REASON_KEY_EXPIRED = 4;            // Key 已过期
+  REGISTER_REASON_FINGERPRINT_MISMATCH = 5;   // 指纹不匹配，疑似 Key 泄露
+}
+
+message RegisterResponse {
+  bool accepted = 1;
+  string node_id = 2;
+  RegisterReason reason = 3;
+  string reject_reason = 4;   // 人类可读的拒绝原因
+  bytes client_cert = 5;      // PEM，签发的客户端证书
+  bytes ca_cert = 6;          // PEM，CA 证书（用于校验服务端）
+  bytes initial_config = 7;   // YAML，节点初始配置
+  int64 cert_expires_at = 8;  // Unix 秒
+}
+
+// ============================================================
+// 指令与结果
+// ============================================================
+
+enum CommandType {
+  COMMAND_TYPE_UNSPECIFIED = 0;
+  COMMAND_TYPE_SHELL = 1;                 // 执行 shell 命令
+  COMMAND_TYPE_FILE_LIST = 2;
+  COMMAND_TYPE_FILE_READ = 3;
+  COMMAND_TYPE_FILE_WRITE = 4;
+  COMMAND_TYPE_FILE_DELETE = 5;
+  COMMAND_TYPE_FILE_STAT = 6;
+  COMMAND_TYPE_NET_GET = 7;               // 读取网卡 / DNS / hosts
+  COMMAND_TYPE_NET_SET = 8;               // 下发网络配置（需提权）
+  COMMAND_TYPE_FIREWALL_GET = 9;
+  COMMAND_TYPE_FIREWALL_SET = 10;         // iptables（需提权）
+  COMMAND_TYPE_TAILSCALE_STATUS = 11;
+  COMMAND_TYPE_TAILSCALE_UP = 12;         // 需提权
+  COMMAND_TYPE_TAILSCALE_DOWN = 13;       // 需提权
+  COMMAND_TYPE_DOCKER_LIST = 14;
+  COMMAND_TYPE_DOCKER_ACTION = 15;        // start / stop / restart（需 docker 组）
+  COMMAND_TYPE_DOCKER_LOGS = 16;
+  COMMAND_TYPE_AGENT_UPGRADE = 17;        // 需提权
+  COMMAND_TYPE_ALERT_RULE_SYNC = 18;      // 下发告警规则到节点本地
+  COMMAND_TYPE_LOG_QUERY = 19;            // 查询节点日志文件
+}
+
+message Command {
+  string trace_id = 1;
+  CommandType type = 2;
+  google.protobuf.Struct params = 3;
+  int32 timeout_sec = 4;
+  bool requires_privilege = 5;   // 控制面已判定该操作需要提权
+}
+
+enum ResultStatus {
+  RESULT_STATUS_UNSPECIFIED = 0;
+  RESULT_STATUS_OK = 1;
+  RESULT_STATUS_FAILED = 2;
+  RESULT_STATUS_NEEDS_PRIVILEGE = 3;  // 无权限，已生成待执行脚本
+  RESULT_STATUS_TIMEOUT = 4;
+  RESULT_STATUS_REJECTED = 5;         // 被节点本地安全策略拒绝
+}
+
+message CommandResult {
+  string trace_id = 1;
+  ResultStatus status = 2;
+  bytes stdout = 3;
+  bytes stderr = 4;
+  int32 exit_code = 5;
+  string message = 6;
+  string privilege_script = 7;   // status=NEEDS_PRIVILEGE 时，供人工 sudo 执行的脚本
+  string privilege_hint = 8;     // 如 "需要 root 权限执行 iptables"
+  int64 duration_ms = 9;
+}
+
+// ============================================================
+// 心跳与遥测
+// ============================================================
+
+message Telemetry {
+  double cpu_percent = 1;
+  uint64 mem_total_bytes = 2;
+  uint64 mem_used_bytes = 3;
+  uint64 disk_total_bytes = 4;
+  uint64 disk_used_bytes = 5;
+  uint64 net_rx_bytes = 6;   // 累计值，由控制面算差速
+  uint64 net_tx_bytes = 7;
+  double load1 = 8;
+  double load5 = 9;
+  double temperature_celsius = 10;
+  uint32 container_running = 11;
+  uint32 container_total = 12;
+}
+
+message Heartbeat {
+  google.protobuf.Timestamp ts = 1;
+  string node_id = 2;
+  Telemetry telemetry = 3;
+  string agent_version = 4;
+  uint64 uptime_sec = 5;
+  bool control_plane_seen = 6;   // Agent 侧认为控制面是否在线
+}
+
+message HeartbeatAck {
+  google.protobuf.Timestamp server_ts = 1;
+  bool has_pending_config = 2;
+  string config_version = 3;
+}
+
+message ConfigPush {
+  string version = 1;
+  bytes payload = 2;   // YAML
+  string checksum = 3; // sha256
+}
+
+message AlertRuleSync {
+  bytes rules_yaml = 1;
+  string version = 2;
+}
+
+message NodeEvent {
+  google.protobuf.Timestamp ts = 1;
+  string kind = 2;     // container_event / alert_fired / agent_error / auth_rejected
+  string message = 3;
+  google.protobuf.Struct data = 4;
+}
+
+// 上行：Agent -> 控制面
+message AgentMessage {
+  string node_id = 1;
+  oneof payload {
+    Heartbeat heartbeat = 2;
+    CommandResult result = 3;
+    CapabilityReport capabilities = 4;
+    NodeEvent event = 5;
+  }
+}
+
+// 下行：控制面 -> Agent
+message ControlMessage {
+  string trace_id = 1;
+  oneof payload {
+    Command command = 2;
+    ConfigPush config_push = 3;
+    HeartbeatAck heartbeat_ack = 4;
+    AlertRuleSync alert_rules = 5;
+  }
+}
+
+// ============================================================
+// 隧道：终端 / 文件 / 端口转发 三合一
+// ============================================================
+
+enum TunnelSessionType {
+  TUNNEL_SESSION_TYPE_UNSPECIFIED = 0;
+  TUNNEL_SESSION_TYPE_TERMINAL = 1;      // pty 终端
+  TUNNEL_SESSION_TYPE_FILE = 2;          // 文件读写
+  TUNNEL_SESSION_TYPE_PORT_FORWARD = 3;  // 1Panel 等本地服务端口转发
+}
+
+message TunnelOpen {
+  string node_id = 1;
+  TunnelSessionType type = 2;
+
+  // terminal
+  uint32 cols = 3;
+  uint32 rows = 4;
+  string shell = 5;          // 为空则取用户默认 shell
+
+  // port forward
+  string target_addr = 6;    // 节点本地地址，如 127.0.0.1:8080
+
+  // file
+  string file_path = 7;
+  string file_op = 8;        // read / write
+}
+
+message TunnelResize {
+  uint32 cols = 1;
+  uint32 rows = 2;
+}
+
+message TunnelClose {
+  string reason = 1;
+  int32 code = 2;
+}
+
+message TunnelChunk {
+  string session_id = 1;
+  oneof frame {
+    TunnelOpen open = 2;
+    bytes data = 3;
+    TunnelClose close = 4;
+    TunnelResize resize = 5;
+  }
+}
+
+// ============================================================
+// 离线数据补传
+// ============================================================
+
+message TelemetryPoint {
+  int64 ts = 1;   // Unix 秒
+  Telemetry telemetry = 2;
+}
+
+message BacklogRequest {
+  string node_id = 1;
+  repeated TelemetryPoint points = 2;
+  repeated NodeEvent events = 3;
+  repeated CommandResult offline_results = 4;
+}
+
+message BacklogResponse {
+  bool accepted = 1;
+  uint32 received_points = 2;
+  uint32 received_events = 3;
+  string message = 4;
+}
