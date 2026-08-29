@@ -7,16 +7,21 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 
 	"ecp.dev/ecp/agent/internal/cache"
 	"ecp.dev/ecp/agent/internal/caps"
 	"ecp.dev/ecp/agent/internal/config"
+	"ecp.dev/ecp/agent/internal/transport"
 	ecpv1 "ecp.dev/ecp/proto/gen/ecp/v1"
 )
 
@@ -122,6 +127,7 @@ func cmdRun(args []string) {
 	defer c.Close()
 
 	s := caps.Probe()
+	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	fmt.Printf("ecp-agent %s 启动\n", version)
 	fmt.Printf("  节点: %s (%s/%s)\n", cfg.Agent.NodeID, runtime.GOOS, runtime.GOARCH)
 	fmt.Printf("  数据目录: %s\n", cfg.Agent.DataDir)
@@ -130,7 +136,16 @@ func cmdRun(args []string) {
 	fmt.Printf("  控制面端点种子: %v\n", cfg.ControlPlane.Endpoints)
 	fmt.Printf("  可用能力: docker=%v tailscale=%v systemd=%v\n",
 		s.CanReadDocker, s.CanManageTailscale, s.CanManageSystemd)
-	fmt.Println("\n注册与指令通道尚未接入（T2 进行中）")
+	fmt.Println("开始连接控制面（自动注册 + 心跳）...")
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	tr := transport.New(cfg, log)
+	if err := tr.Run(ctx); err != nil && err != context.Canceled {
+		fmt.Fprintf(os.Stderr, "运行异常: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 // configPath 从命令行参数取配置路径，未提供时用默认位置。

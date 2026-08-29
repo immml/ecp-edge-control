@@ -14,7 +14,9 @@ import (
 	"time"
 
 	ecpv1 "ecp.dev/ecp/proto/gen/ecp/v1"
+	"ecp.dev/ecp/server/internal/ca"
 	"ecp.dev/ecp/server/internal/config"
+	"ecp.dev/ecp/server/internal/grpcserver"
 	"ecp.dev/ecp/server/internal/logx"
 	"ecp.dev/ecp/server/internal/store"
 )
@@ -63,6 +65,15 @@ func main() {
 	}
 	defer st.Close()
 
+	// 内置 CA：缺则生成，存于 runtime/certs；控制面重启复用，避免节点被迫重连
+	certsDir := filepath.Join(cfg.Server.DataDir, "certs")
+	caInstance, err := ca.LoadOrCreate(certsDir)
+	if err != nil {
+		log.Error("初始化 CA 失败", "err",  err)
+		os.Exit(1)
+	}
+	log.Info("CA 就绪", "certs_dir", absPath(certsDir))
+
 	log.Info("控制面启动",
 		"version", version,
 		"https", cfg.Server.Listen,
@@ -79,6 +90,14 @@ func main() {
 		)
 		return
 	}
+
+	// 启动 gRPC 接入层（节点注册与指令通道）
+	grpcSrv := grpcserver.New(st, caInstance, cfg, log)
+	go func() {
+		if err := grpcSrv.Serve(cfg.Server.GRPCListen); err != nil {
+			log.Error("gRPC 服务异常", "err", err)
+		}
+	}()
 
 	// 优雅退出：控制面是按需启动的终端，退出时必须干净，
 	// 否则 SQLite 可能留下锁文件，下次启动报错。

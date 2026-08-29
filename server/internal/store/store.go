@@ -170,6 +170,42 @@ func (s *Store) BindFingerprint(nodeID, fingerprint string) error {
 	return s.db.Create(f).Error
 }
 
+// BindKeyToNode 把注册 Key 绑定到某个节点（首次绑定或重认证时调用）。
+//
+// 一旦绑定，该 Key 就只能用于这台节点——这是"上线即控"的硬约束：
+// 即便 Key 泄露，攻击者也无法用它绑定一台新设备。
+func (s *Store) BindKeyToNode(keyHash, nodeID string) error {
+	return s.db.Model(&model.RegistrationKey{}).
+		Where("key_hash = ?", keyHash).
+		Update("bound_node_id", nodeID).Error
+}
+
+// IssueCredential 登记一张签发给节点的客户端证书台账。
+//
+// 证书本身的 PEM 不入库（私钥与证书都在节点本地），这里只记台账，
+// 便于后续吊销查询与审计。
+func (s *Store) IssueCredential(nodeID, serial string, expiresAt time.Time) error {
+	c := &model.NodeCredential{
+		NodeID:     nodeID,
+		CertSerial: serial,
+		IssuedAt:   time.Now(),
+		ExpiresAt:  expiresAt,
+	}
+	return s.db.Create(c).Error
+}
+
+// IsCertRevoked 判断某个序列号的客户端证书是否已被吊销。
+func (s *Store) IsCertRevoked(nodeID string, serial string) (bool, error) {
+	var c model.NodeCredential
+	if err := s.db.Where("node_id = ? AND cert_serial = ?", nodeID, serial).First(&c).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return true, nil // 不在台账里的证书视为无效
+		}
+		return true, err
+	}
+	return c.RevokedAt != nil, nil
+}
+
 // ============================================================
 // 审计日志（append-only）
 // ============================================================
