@@ -137,7 +137,7 @@ func main() {
 
 	// REST + 控制台 HTTPS
 	disp := command.New(grpcSrv.Sessions(), st, log.Info)
-	engine := api.New(st, grpcSrv.Sessions(), disp, log.Info)
+	engine := api.New(st, grpcSrv.Sessions(), disp, grpcSrv, log.Info)
 	engine.NoRoute(func(c *gin.Context) {
 		// 静态资源：内置前端（embed 目录名 spa），未命中则回退首页（SPA history 模式）
 		data, err := web.FS().ReadFile("spa" + c.Request.URL.Path)

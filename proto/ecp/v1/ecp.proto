@@ -63,6 +63,7 @@ message CapabilityReport {
   int32 run_as_uid = 11;
   string run_as_user = 12;
   repeated string missing_tools = 13; // 缺失的外部命令，如 tailscale / docker
+  string panel_entrance = 14;         // 1Panel 安全入口路径（如 /orangepi），自动打开用
 }
 
 message RegisterRequest {

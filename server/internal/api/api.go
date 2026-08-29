@@ -18,6 +18,7 @@ import (
 	ecpv1 "ecp.dev/ecp/proto/gen/ecp/v1"
 	"ecp.dev/ecp/server/internal/auth"
 	"ecp.dev/ecp/server/internal/command"
+	"ecp.dev/ecp/server/internal/grpcserver"
 	"ecp.dev/ecp/server/internal/session"
 	"ecp.dev/ecp/server/internal/store"
 	"ecp.dev/ecp/server/internal/store/model"
@@ -49,21 +50,25 @@ func fail(c *gin.Context, httpStatus, code int, msg string) {
 
 // Handler 聚合依赖。
 type Handler struct {
-	store      *store.Store
-	sessions   *session.Manager
-	dispatch   *command.Dispatcher
-	log        func(string, ...any)
+	store    *store.Store
+	sessions *session.Manager
+	dispatch *command.Dispatcher
+	grpc     *grpcserver.Server
+	log      func(string, ...any)
 }
 
 // New 构造 gin 引擎。
-func New(st *store.Store, sessions *session.Manager, dispatch *command.Dispatcher, log func(string, ...any)) *gin.Engine {
-	h := &Handler{store: st, sessions: sessions, dispatch: dispatch, log: log}
+func New(st *store.Store, sessions *session.Manager, dispatch *command.Dispatcher, gs *grpcserver.Server, log func(string, ...any)) *gin.Engine {
+	h := &Handler{store: st, sessions: sessions, dispatch: dispatch, grpc: gs, log: log}
 	r := gin.New()
 	r.Use(gin.Recovery())
 
 	r.POST("/api/v1/login", h.Login)
 	// WebSocket 无法携带 Authorization header，终端走 query token 自校验
 	r.GET("/api/v1/nodes/:id/terminal/ws", h.TerminalWS)
+	// 1Panel 内置流量：浏览器只连控制台，经隧道转发到节点本地 31252。
+	// 免鉴权（控制台仅本机监听；代理不绕过 1Panel 自身登录鉴权）。
+	r.Any("/api/v1/nodes/:id/panel/*path", h.PanelProxy)
 
 	api := r.Group("/api/v1")
 	api.Use(h.JWTAuth())
@@ -242,6 +247,7 @@ func decodeCapabilities(s string) gin.H {
 		"runAsUid":           c.RunAsUid,
 		"runAsUser":          c.RunAsUser,
 		"missingTools":       c.MissingTools,
+		"panelEntrance":      c.PanelEntrance,
 	}
 }
 

@@ -10,13 +10,17 @@
 package caps
 
 import (
+	"database/sql"
 	"net"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
+
+	_ "github.com/glebarez/sqlite" // 纯 Go sqlite 驱动（读 1Panel core.db 用）
 )
 
 // Set 是能力探测结果，与 proto 的 CapabilityReport 一一对应。
@@ -35,6 +39,9 @@ type Set struct {
 	RunAsUID     int
 	RunAsUser    string
 	MissingTools []string
+	// PanelEntrance 是 1Panel 安全入口路径（如 /orangepi）。
+	// 读取的是 1Panel 配置里的公开路径前缀，非凭据；用于控制台自动打开入口。
+	PanelEntrance string
 }
 
 // DockerSocket 是 Docker 守护进程的默认套接字路径。
@@ -79,7 +86,46 @@ func Probe() *Set {
 		}
 	}
 
+	s.PanelEntrance = probePanelEntrance()
+
 	return s
+}
+
+// probePanelEntrance 读取 1Panel 的安全入口路径（公开路径前缀，非凭据）。
+// 优先配置文件 /opt/1panel/conf/app.yaml（system.entrance），
+// 其次只读查询 1Panel 的 core.db settings 表（键含 entrance）。
+func probePanelEntrance() string {
+	const conf = "/opt/1panel/conf/app.yaml"
+	if data, err := os.ReadFile(conf); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "entrance:") {
+				v := strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, "entrance:")), `"'`)
+				if v != "" && v != "/" {
+					return v
+				}
+			}
+		}
+	}
+	return probePanelEntranceDB()
+}
+
+// probePanelEntranceDB 只读 core.db 的 settings 表（mode=ro，不碰凭据键）。
+func probePanelEntranceDB() string {
+	db, err := sql.Open("sqlite", "file:/opt/1panel/db/core.db?mode=ro&_pragma=busy_timeout(1000)")
+	if err != nil {
+		return ""
+	}
+	defer db.Close()
+	var v string
+	if err := db.QueryRow("SELECT value FROM settings WHERE key LIKE '%ntrance%' LIMIT 1").Scan(&v); err != nil {
+		return ""
+	}
+	v = strings.TrimSpace(v)
+	if v != "" && v != "/" {
+		return v
+	}
+	return ""
 }
 
 // probeDocker 判断 Docker 套接字是否可访问。

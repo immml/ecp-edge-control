@@ -30,6 +30,7 @@ export interface Capabilities {
   runAsUid: number
   runAsUser: string
   missingTools: string[]
+  panelEntrance?: string
 }
 
 export interface Telemetry {

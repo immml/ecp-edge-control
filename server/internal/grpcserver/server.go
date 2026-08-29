@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc"
@@ -45,6 +46,16 @@ type Server struct {
 	cfg      *config.Config
 	sessions *session.Manager
 	log      *slog.Logger
+
+	tunnelsMu sync.Mutex
+	tunnels   map[string]*nodeTunnel // nodeID -> 常驻端口转发隧道
+}
+
+// nodeTunnel 是一条 Agent 打开的常驻 Tunnel 流。
+type nodeTunnel struct {
+	mu       sync.Mutex
+	stream   ecpv1.AgentService_TunnelServer
+	sessions map[string]chan *ecpv1.TunnelChunk // session_id -> agent 上行数据缓冲
 }
 
 // New 构造 gRPC 服务。
@@ -55,6 +66,7 @@ func New(st *store.Store, ca *ca.CA, cfg *config.Config, log *slog.Logger) *Serv
 		cfg:      cfg,
 		sessions: session.New(sessionTTL),
 		log:      log,
+		tunnels:  map[string]*nodeTunnel{},
 	}
 }
 
@@ -158,6 +170,139 @@ func (s *Server) Register(ctx context.Context, req *ecpv1.RegisterRequest) (*ecp
 		InitialConfig: initCfg,
 		CertExpiresAt: time.Now().Add(ttl).Unix(),
 	}, nil
+}
+
+// Tunnel 接收 Agent 打开的常驻端口转发隧道，并把 Agent 上行帧路由给对应会话。
+func (s *Server) Tunnel(stream ecpv1.AgentService_TunnelServer) error {
+	nodeID, err := verifyClientCert(stream.Context())
+	if err != nil {
+		return err
+	}
+	nt := &nodeTunnel{stream: stream, sessions: map[string]chan *ecpv1.TunnelChunk{}}
+	s.tunnelsMu.Lock()
+	if old := s.tunnels[nodeID]; old != nil {
+		old.closeAll() // 旧隧道先回收（重连场景）
+	}
+	s.tunnels[nodeID] = nt
+	s.tunnelsMu.Unlock()
+	defer func() {
+		s.tunnelsMu.Lock()
+		if s.tunnels[nodeID] == nt {
+			delete(s.tunnels, nodeID)
+		}
+		s.tunnelsMu.Unlock()
+		nt.closeAll()
+	}()
+
+	for {
+		chunk, err := stream.Recv()
+		if err != nil {
+			return err
+		}
+		nt.deliver(chunk)
+	}
+}
+
+// OpenTunnelSession 为节点开启一个端口转发会话，返回 agent 上行数据通道。
+func (s *Server) OpenTunnelSession(nodeID, target string) (string, <-chan []byte, func([]byte) error, func(), error) {
+	s.tunnelsMu.Lock()
+	nt := s.tunnels[nodeID]
+	s.tunnelsMu.Unlock()
+	if nt == nil {
+		return "", nil, nil, nil, fmt.Errorf("节点没有可用隧道（可能离线）")
+	}
+	sid := uuid8()
+	ch := make(chan *ecpv1.TunnelChunk, 128)
+	nt.mu.Lock()
+	nt.sessions[sid] = ch
+	nt.mu.Unlock()
+
+	if err := nt.send(&ecpv1.TunnelChunk{
+		SessionId: sid,
+		Frame: &ecpv1.TunnelChunk_Open{
+			Open: &ecpv1.TunnelOpen{
+				Type:       ecpv1.TunnelSessionType_TUNNEL_SESSION_TYPE_PORT_FORWARD,
+				TargetAddr: target,
+			},
+		},
+	}); err != nil {
+		nt.remove(sid)
+		return "", nil, nil, nil, err
+	}
+
+	// 数据帧 → []byte 通道
+	out := make(chan []byte, 256)
+	go func() {
+		for c := range ch {
+			switch f := c.GetFrame().(type) {
+			case *ecpv1.TunnelChunk_Data:
+				out <- f.Data
+			case *ecpv1.TunnelChunk_Close:
+				close(out)
+				return
+			}
+		}
+		close(out)
+	}()
+
+	write := func(data []byte) error {
+		return nt.send(&ecpv1.TunnelChunk{
+			SessionId: sid,
+			Frame:     &ecpv1.TunnelChunk_Data{Data: data},
+		})
+	}
+	closeFn := func() {
+		nt.remove(sid)
+		_ = nt.send(&ecpv1.TunnelChunk{
+			SessionId: sid,
+			Frame:     &ecpv1.TunnelChunk_Close{Close: &ecpv1.TunnelClose{Code: 0, Reason: "proxy closed"}},
+		})
+	}
+	return sid, out, write, closeFn, nil
+}
+
+func (nt *nodeTunnel) deliver(chunk *ecpv1.TunnelChunk) {
+	nt.mu.Lock()
+	ch := nt.sessions[chunk.GetSessionId()]
+	nt.mu.Unlock()
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- chunk:
+	default:
+	}
+}
+
+func (nt *nodeTunnel) send(chunk *ecpv1.TunnelChunk) error {
+	nt.mu.Lock()
+	defer nt.mu.Unlock()
+	return nt.stream.Send(chunk)
+}
+
+func (nt *nodeTunnel) remove(sid string) {
+	nt.mu.Lock()
+	ch := nt.sessions[sid]
+	delete(nt.sessions, sid)
+	nt.mu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- &ecpv1.TunnelChunk{SessionId: sid, Frame: &ecpv1.TunnelChunk_Close{Close: &ecpv1.TunnelClose{Code: 1, Reason: "removed"}}}:
+		default:
+		}
+	}
+}
+
+func (nt *nodeTunnel) closeAll() {
+	nt.mu.Lock()
+	defer nt.mu.Unlock()
+	for sid, ch := range nt.sessions {
+		select {
+		case ch <- &ecpv1.TunnelChunk{SessionId: sid, Frame: &ecpv1.TunnelChunk_Close{Close: &ecpv1.TunnelClose{Code: 2, Reason: "tunnel gone"}}}:
+		default:
+		}
+		delete(nt.sessions, sid)
+	}
 }
 
 // CommandStream 是双向流：Agent 上报心跳与执行结果，控制面下发指令与配置。

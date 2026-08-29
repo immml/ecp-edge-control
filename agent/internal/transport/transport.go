@@ -92,6 +92,7 @@ func (t *Transport) Run(ctx context.Context) error {
 		backoff = 1 * time.Second // 连上即重置退避
 
 		t.log.Info("已连接到控制面", "addr", eps[0])
+		go t.openTunnel(ctx, conn, id) // 常驻端口转发隧道（1Panel 等）
 		err = t.streamLoop(ctx, conn, id)
 		t.log.Info("连接断开", "err", err)
 		_ = conn.Close()
@@ -404,5 +405,6 @@ func capsToProto(s *caps.Set) *ecpv1.CapabilityReport {
 		RunAsUid:           int32(s.RunAsUID),
 		RunAsUser:          s.RunAsUser,
 		MissingTools:       s.MissingTools,
+		PanelEntrance:      s.PanelEntrance,
 	}
 }

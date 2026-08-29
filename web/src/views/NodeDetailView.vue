@@ -19,7 +19,7 @@ const history = ref<TelemetrySample[]>([]) // 升序（旧→新）
 async function load() {
   try {
     const d = await api.getNode(nodeId)
-    node.value = d.node
+    node.value = { ...(d as any).node, capabilities: (d as any).view?.capabilities }
     online.value = d.online
   } catch (e: any) {
     // 控制面离线时回退到示例数据，保持页面可浏览
@@ -74,14 +74,12 @@ function timeLabel(i: number): string {
   return new Date(t.ts).toLocaleTimeString('zh-CN', { hour12: false })
 }
 
-// 远程打开节点 1Panel（优先 Tailscale IP，跨网可用；仅做网络可达，不绕过其鉴权）
+// 远程打开节点 1Panel：走控制面内置流量转发，自动带安全入口
 function openPanel() {
-  const ip = node.value?.tailscale_ip
-  if (!ip) {
-    ElMessage.warning('该节点没有可用的 Tailscale IP，无法远程打开 1Panel')
-    return
-  }
-  window.open(`http://${ip}:31252`, '_blank', 'noopener')
+  const entrance = node.value?.capabilities?.panelEntrance || ''
+  const base = `/api/v1/nodes/${nodeId}/panel`
+  const url = entrance ? `${base}${entrance.startsWith('/') ? entrance : '/' + entrance}` : `${base}/`
+  window.open(url, '_blank', 'noopener')
 }
 </script>
 
