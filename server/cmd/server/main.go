@@ -6,19 +6,28 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	ecpv1 "ecp.dev/ecp/proto/gen/ecp/v1"
+	"ecp.dev/ecp/server/internal/api"
+	"ecp.dev/ecp/server/internal/auth"
 	"ecp.dev/ecp/server/internal/ca"
+	"ecp.dev/ecp/server/internal/command"
 	"ecp.dev/ecp/server/internal/config"
 	"ecp.dev/ecp/server/internal/grpcserver"
 	"ecp.dev/ecp/server/internal/logx"
 	"ecp.dev/ecp/server/internal/store"
+	"ecp.dev/ecp/server/internal/store/model"
+	"ecp.dev/ecp/server/internal/web"
 )
 
 // 由 -ldflags "-X main.version=..." 注入
@@ -31,13 +40,11 @@ func main() {
 		return
 	}
 
-	// init 模式：建库建表后即退出，供部署脚本与首次运行使用
 	mode := "serve"
+	cfgPath := os.Getenv("ECP_CONFIG")
 	if len(os.Args) > 1 && os.Args[1] == "init" {
 		mode = "init"
 	}
-
-	cfgPath := os.Getenv("ECP_CONFIG")
 	if cfgPath == "" && len(os.Args) > 2 && os.Args[1] == "-c" {
 		cfgPath = os.Args[2]
 	}
@@ -65,11 +72,16 @@ func main() {
 	}
 	defer st.Close()
 
+	// 首次启动：创建超管账户（口令仅显示一次）
+	if err := bootstrapAdmin(st, log); err != nil {
+		log.Error("初始化超管失败", "err", err)
+	}
+
 	// 内置 CA：缺则生成，存于 runtime/certs；控制面重启复用，避免节点被迫重连
 	certsDir := filepath.Join(cfg.Server.DataDir, "certs")
 	caInstance, err := ca.LoadOrCreate(certsDir)
 	if err != nil {
-		log.Error("初始化 CA 失败", "err",  err)
+		log.Error("初始化 CA 失败", "err", err)
 		os.Exit(1)
 	}
 	log.Info("CA 就绪", "certs_dir", absPath(certsDir))
@@ -82,12 +94,8 @@ func main() {
 		"tls_mode", cfg.TLS.Mode,
 	)
 
-	printBootstrapInfo(log, cfg, st)
-
 	if mode == "init" {
-		log.Info("init 模式：库表已就绪，退出",
-			"tables", len(st.Tables()),
-		)
+		log.Info("init 模式：库表已就绪，退出", "tables", len(st.Tables()))
 		return
 	}
 
@@ -99,37 +107,68 @@ func main() {
 		}
 	}()
 
-	// 优雅退出：控制面是按需启动的终端，退出时必须干净，
-	// 否则 SQLite 可能留下锁文件，下次启动报错。
+	// REST + 控制台 HTTPS
+	disp := command.New(grpcSrv.Sessions(), st, log.Info)
+	engine := api.New(st, grpcSrv.Sessions(), disp, log.Info)
+	engine.NoRoute(func(c *gin.Context) {
+		// 静态资源：内置前端，未命中则回退首页（SPA history 模式）
+		data, err := web.FS().ReadFile("dist" + c.Request.URL.Path)
+		if err != nil {
+			data, _ = web.FS().ReadFile("dist/index.html")
+		}
+		c.Data(http.StatusOK, "text/html; charset=utf-8", data)
+	})
+
+	srv := &http.Server{
+		Addr:    cfg.Server.Listen,
+		Handler: engine,
+	}
+	if cert, key, err := caInstance.SignServerCert([]string{"localhost", "ecp-control"}, 8760*time.Hour); err == nil {
+		if tlsCert, err := tls.X509KeyPair(cert, key); err == nil {
+			srv.TLSConfig = &tls.Config{Certificates: []tls.Certificate{tlsCert}}
+		}
+	}
+	go func() {
+		log.Info("控制台监听", "addr", "https://"+cfg.Server.Listen)
+		if err := srv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+			log.Error("HTTP 服务异常", "err", err)
+		}
+	}()
+
+	// 优雅退出
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
 	<-ctx.Done()
 	log.Info("收到退出信号，正在关闭")
-
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_ = shutdownCtx
-
+	_ = srv.Shutdown(shutdownCtx)
 	if err := st.Close(); err != nil {
 		log.Warn("关闭数据库时出错", "err", err)
 	}
 	log.Info("控制面已退出")
 }
 
-// printBootstrapInfo 在首次启动时把必要信息明确打给用户。
-// 控制面是个人管理终端，用户不该去翻文档才知道怎么登录。
-func printBootstrapInfo(log logger, cfg *config.Config, st *store.Store) {
-	var count int64
-	if err := st.DB().Model(&struct{}{}).Count(&count).Error; err == nil {
-		_ = count
+// bootstrapAdmin 在库内无用户时创建默认超管，口令打印到日志（仅一次）。
+func bootstrapAdmin(st *store.Store, log logger) error {
+	n, err := st.CountUsers()
+	if err != nil {
+		return err
 	}
-
-	log.Info("数据目录已就绪", "dir", absPath(cfg.Server.DataDir))
-	log.Info("监听地址",
-		"console", fmt.Sprintf("https://%s", cfg.Server.Listen),
-		"note", "自签证书，浏览器首次访问需手动信任",
-	)
+	if n > 0 {
+		return nil
+	}
+	pw := auth.GenerateInitialPassword()
+	hash, err := auth.HashPassword(pw)
+	if err != nil {
+		return err
+	}
+	u := &model.User{Username: "admin", PasswordHash: hash, Role: model.RoleAdmin}
+	if err := st.CreateUser(u); err != nil {
+		return err
+	}
+	log.Warn("已创建初始超管账户（请尽快修改口令）", "username", "admin", "password", pw)
+	return nil
 }
 
 type logger interface {

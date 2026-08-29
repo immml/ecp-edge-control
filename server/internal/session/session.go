@@ -24,6 +24,7 @@ type Manager struct {
 	sessions  map[string]*Session
 	ttl       time.Duration
 	telemetry map[string]*ecpv1.Telemetry
+	waiters   map[string]chan *ecpv1.CommandResult
 }
 
 // New 创建会话管理器。ttl 控制"多久没心跳算离线"。
@@ -34,6 +35,7 @@ func New(ttl time.Duration) *Manager {
 	return &Manager{
 		sessions:  make(map[string]*Session),
 		telemetry: make(map[string]*ecpv1.Telemetry),
+		waiters:   make(map[string]chan *ecpv1.CommandResult),
 		ttl:       ttl,
 	}
 }
@@ -113,6 +115,45 @@ func (m *Manager) LatestTelemetry(nodeID string) *ecpv1.Telemetry {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.telemetry[nodeID]
+}
+
+// RegisterWaiter 注册一个等待指定 trace_id 结果的通道，返回该通道。
+// 调用方应在拿到结果或超时后调用 CancelWaiter 释放。
+func (m *Manager) RegisterWaiter(traceID string) <-chan *ecpv1.CommandResult {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ch := make(chan *ecpv1.CommandResult, 1)
+	m.waiters[traceID] = ch
+	return ch
+}
+
+// CancelWaiter 移除指定 trace_id 的等待者。
+func (m *Manager) CancelWaiter(traceID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ch, ok := m.waiters[traceID]; ok {
+		close(ch)
+		delete(m.waiters, traceID)
+	}
+}
+
+// DeliverResult 把 Agent 回传的执行结果投递给对应的等待者。
+// 没有等待者（如离线补传、心跳频道的无关帧）则静默丢弃。
+func (m *Manager) DeliverResult(traceID string, res *ecpv1.CommandResult) bool {
+	m.mu.Lock()
+	ch, ok := m.waiters[traceID]
+	if ok {
+		delete(m.waiters, traceID)
+	}
+	m.mu.Unlock()
+	if !ok {
+		return false
+	}
+	select {
+	case ch <- res:
+	default:
+	}
+	return true
 }
 
 var ErrOffline = ErrOfflineType("节点离线")

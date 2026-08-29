@@ -57,6 +57,9 @@ func New(st *store.Store, ca *ca.CA, cfg *config.Config, log *slog.Logger) *Serv
 	}
 }
 
+// Sessions 返回会话管理器，供 REST 层与指令分发器共用。
+func (s *Server) Sessions() *session.Manager { return s.sessions }
+
 // Register 处理节点注册。这是唯一免客户端证书的入口。
 //
 // 用注册 Key 哈希 + 硬件指纹换取客户端证书；首次绑定与重认证走同一接口，
@@ -197,6 +200,11 @@ func (s *Server) handleAgentMessage(sess *session.Session, msg *ecpv1.AgentMessa
 	switch p := msg.Payload.(type) {
 	case *ecpv1.AgentMessage_Heartbeat:
 		s.sessions.PutTelemetry(msg.NodeId, p.Heartbeat.Telemetry)
+		if p.Heartbeat.Telemetry != nil {
+			if err := s.store.SaveTelemetry(msg.NodeId, p.Heartbeat.Telemetry); err != nil {
+				s.log.Warn("遥测落库失败", "node_id", msg.NodeId, "err", err)
+			}
+		}
 		ack := &ecpv1.ControlMessage{
 			TraceId: msg.NodeId,
 			Payload: &ecpv1.ControlMessage_HeartbeatAck{
@@ -209,6 +217,7 @@ func (s *Server) handleAgentMessage(sess *session.Session, msg *ecpv1.AgentMessa
 		_ = sess.Stream.Send(ack)
 	case *ecpv1.AgentMessage_Result:
 		s.log.Info("收到指令结果", "node_id", msg.NodeId, "trace", p.Result.TraceId, "status", p.Result.Status)
+		s.sessions.DeliverResult(p.Result.TraceId, p.Result)
 	case *ecpv1.AgentMessage_Capabilities:
 		s.log.Info("收到能力上报", "node_id", msg.NodeId)
 	case *ecpv1.AgentMessage_Event:

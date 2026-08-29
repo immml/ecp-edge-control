@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 
+	ecpv1 "ecp.dev/ecp/proto/gen/ecp/v1"
 	"ecp.dev/ecp/server/internal/store/model"
 )
 
@@ -300,6 +301,45 @@ func (s *Store) SaveAddress(a *model.NodeAddress) error {
 func (s *Store) ListAddresses(nodeID string) ([]model.NodeAddress, error) {
 	var out []model.NodeAddress
 	if err := s.db.Where("node_id = ?", nodeID).Find(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ============================================================
+// 遥测采样（控制面落库，供控制台图表展示）
+// ============================================================
+
+// SaveTelemetry 写入一条遥测采样。每次心跳都会调用，写入频率由采集间隔决定。
+func (s *Store) SaveTelemetry(nodeID string, t *ecpv1.Telemetry) error {
+	if t == nil {
+		return nil
+	}
+	sample := &model.TelemetrySample{
+		NodeID:             nodeID,
+		Ts:                 time.Now(),
+		CPUPercent:         t.GetCpuPercent(),
+		MemTotalBytes:      t.GetMemTotalBytes(),
+		MemUsedBytes:       t.GetMemUsedBytes(),
+		DiskTotalBytes:     t.GetDiskTotalBytes(),
+		DiskUsedBytes:      t.GetDiskUsedBytes(),
+		NetRxBytes:         t.GetNetRxBytes(),
+		NetTxBytes:         t.GetNetTxBytes(),
+		Load1:              t.GetLoad1(),
+		TemperatureCelsius: t.GetTemperatureCelsius(),
+		ContainersRunning:  t.GetContainerRunning(),
+	}
+	return s.db.Create(sample).Error
+}
+
+// ListTelemetry 返回节点最近的遥测采样（按时间倒序）。
+func (s *Store) ListTelemetry(nodeID string, limit int) ([]model.TelemetrySample, error) {
+	if limit <= 0 || limit > 2000 {
+		limit = 500
+	}
+	var out []model.TelemetrySample
+	if err := s.db.Where("node_id = ?", nodeID).
+		Order("ts desc").Limit(limit).Find(&out).Error; err != nil {
 		return nil, err
 	}
 	return out, nil
