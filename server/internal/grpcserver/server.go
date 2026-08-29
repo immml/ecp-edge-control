@@ -184,6 +184,18 @@ func (s *Server) CommandStream(stream ecpv1.AgentService_CommandStreamServer) er
 	defer s.sessions.Detach(nodeID)
 	s.log.Info("节点接入", "node_id", nodeID)
 
+	// 免注册直连（重启后带证书直接接入）时确保节点落库，控制台列表才可见
+	if _, err := s.store.GetNode(nodeID); err != nil {
+		if uerr := s.store.UpsertNode(&model.Node{
+			ID:           nodeID,
+			Status:       model.StatusOnline,
+			AgentVersion: "unknown",
+			RegisteredAt: time.Now(),
+		}); uerr != nil {
+			s.log.Warn("节点接入落库失败", "node_id", nodeID, "err", uerr)
+		}
+	}
+
 	for {
 		msg, err := stream.Recv()
 		if err != nil {
