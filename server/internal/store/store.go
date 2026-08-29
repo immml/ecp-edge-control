@@ -207,6 +207,52 @@ func (s *Store) IsCertRevoked(nodeID string, serial string) (bool, error) {
 }
 
 // ============================================================
+// 用户与 RBAC
+// ============================================================
+
+// GetUserByUsername 按用户名查询用户。
+func (s *Store) GetUserByUsername(name string) (*model.User, error) {
+	var u model.User
+	if err := s.db.Where("username = ?", name).First(&u).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &u, nil
+}
+
+// CreateUser 创建控制台用户。
+func (s *Store) CreateUser(u *model.User) error {
+	return s.db.Create(u).Error
+}
+
+// ListUsers 返回全部用户（不含密码哈希）。
+func (s *Store) ListUsers() ([]model.User, error) {
+	var out []model.User
+	if err := s.db.Order("id asc").Find(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// CountUsers 返回用户总数，用于首次启动判断是否需要创建超管。
+func (s *Store) CountUsers() (int64, error) {
+	var n int64
+	if err := s.db.Model(&model.User{}).Count(&n).Error; err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// UpdateLastLogin 记录用户最后登录时间。
+func (s *Store) UpdateLastLogin(id uint) error {
+	return s.db.Model(&model.User{}).
+		Where("id = ?", id).
+		Update("last_login_at", time.Now()).Error
+}
+
+// ============================================================
 // 审计日志（append-only）
 // ============================================================
 

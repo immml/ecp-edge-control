@@ -50,9 +50,11 @@
 |---|---|---|---|---|
 | **#1** | `ad286cd` | `docs(requirements): 边缘节点控制平台需求清单 v1.1 定稿` | 需求定稿 | 7 批提问收敛；新增 .gitignore、.gitattributes、开发日志骨架 |
 | **#2** | `e97841a` | `feat(scaffold): 搭建项目骨架与 gRPC 契约，验证双架构交叉编译` | 脚手架 | proto 契约定稿 + 生成代码；server/agent 双 Go 模块；amd64/arm64 交叉编译验证通过 |
-| **#3** | 待提交 | `docs(architecture): ...` | 架构 v2 确认 | `docs/架构设计-v2.md`（砍 CF，改 Tailscale + P2P + FRP） |
-| **#6** | 待提交 | `feat(transport): 实现注册鉴权与 gRPC 传输层（T2）` | T2 传输层 | server/internal/ca、grpcserver、session；agent/internal/register、transport、executor；删除废弃 worker/ |
-| — | 待提交 | 各模块完成 | T1~Tn 分批提交 |
+| **#3** | `903d0da` | `feat(server): 实现控制面的配置、日志与存储层` | 控制面基础 | config/logs/store（GORM + glebarez/sqlite） |
+| **#4** | `75d6a43` | `feat(agent): 实现 Agent 配置、能力探测与本地缓存` | Agent 基础 | config/能力探测/capability |
+| **#5** | `6cac5a8` | `feat(web): 搭建控制台前端骨架（Cloudflare 风格，主题色 #6b37c9）` | 前端骨架 | Vue3 + TS + Element Plus + Vite |
+| **#6** | `b4a82dc` | `feat(transport): 实现注册鉴权与 gRPC 传输层（T2）` | T2 传输层 | server/internal/ca、grpcserver、session；agent/internal/register、transport、executor；删除废弃 worker/ |
+| **#7** | 待提交 | `feat(console): 实现 REST API、JWT/RBAC 与前端接通后端（T3）` | T3 控制台 | auth/command/api/web 包；前端 client/LoginView/auth store；指令下发闭环 |
 | — | 待提交 | 测试通过 | Orange Pi 真机端到端验证 |
 
 回滚方式：`git revert <commit>` 或 `git reset --hard <编号对应 commit hash>`
@@ -111,7 +113,7 @@ buf generate
 |---|---|---|
 | 一 · 需求澄清 | ✅ 完成，用户已确认 | `docs/需求清单.md` v1.1 |
 | 二 · 架构设计 | ⏳ 待用户确认 | `docs/架构设计.md` v1.0 |
-| 三 · 开发落地 | 🔄 进行中 | T2 传输层与注册鉴权已实现并通过编译；server/agent 双二进制交叉编译验证通过；待真机端到端联调 |
+| 三 · 开发落地 | 🔄 进行中 | T2 传输层与注册鉴权已提交（#6）；T3 REST/JWT/RBAC/指令下发已实现并验证，待提交（#7）；server/agent 双二进制交叉编译通过；待真机端到端联调 |
 
 ---
 

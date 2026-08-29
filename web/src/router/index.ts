@@ -1,7 +1,14 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
+import { api } from '@/api/client'
 
 const routes: RouteRecordRaw[] = [
   { path: '/', redirect: '/nodes' },
+  {
+    path: '/login',
+    name: 'login',
+    component: () => import('@/views/LoginView.vue'),
+    meta: { title: '登录', hidden: true },
+  },
   {
     path: '/nodes',
     name: 'nodes',
@@ -37,6 +44,14 @@ const routes: RouteRecordRaw[] = [
 const router = createRouter({
   history: createWebHistory(),
   routes,
+})
+
+// 登录守卫：未携带 token 必须先登录；已登录访问 /login 直接进控制台
+router.beforeEach((to) => {
+  const authed = api.isAuthed()
+  if (!authed && to.path !== '/login') return '/login'
+  if (authed && to.path === '/login') return '/nodes'
+  return true
 })
 
 router.afterEach((to) => {

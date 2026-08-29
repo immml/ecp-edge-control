@@ -1,16 +1,20 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Monitor, Cpu, Timer } from '@element-plus/icons-vue'
+import { Cpu, Timer, Refresh } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 
+import { api, type ApiNode } from '@/api/client'
 import { mockNodes } from '@/mock/nodes'
 import { formatBytes, percent, timeAgo } from '@/utils/format'
 import type { Node } from '@/api/types'
 
 const router = useRouter()
-const nodes = ref<Node[]>(mockNodes)
+const nodes = ref<Node[]>([])
+const loading = ref(false)
+const usingMock = ref(false)
 
-// 能力摘要：把 10 项能力压成几个关键 chip，避免卡片被标签淹没
+// 能力摘要：把能力压成几个关键 chip，避免卡片被标签淹没
 function capabilityChips(node: Node) {
   const c = node.capabilities
   return [
@@ -22,6 +26,69 @@ function capabilityChips(node: Node) {
 }
 
 const onlineCount = computed(() => nodes.value.filter((n) => n.status === 'online').length)
+
+function mapRow(n: ApiNode): Node {
+  return {
+    id: n.id,
+    hostname: n.hostname,
+    arch: n.arch,
+    os: n.os,
+    osVersion: '',
+    kernel: '',
+    agentVersion: n.agent_version,
+    tailscaleIp: '',
+    status: (n.status as Node['status']) || 'unknown',
+    capabilities: {
+      canReadSystemStats: false,
+      canTerminal: false,
+      canManageFiles: false,
+      canReadDocker: false,
+      canWriteDocker: false,
+      canManageTailscale: false,
+      canManageNetwork: false,
+      canManageSystemd: false,
+      canSelfUpgrade: false,
+      canReadNetConfig: false,
+      runAsUid: 0,
+      runAsUser: '',
+      missingTools: [],
+    },
+    telemetry: {
+      cpuPercent: n.cpu_percent ?? 0,
+      memTotalBytes: n.mem_total_bytes ?? 0,
+      memUsedBytes: n.mem_used_bytes ?? 0,
+      diskTotalBytes: 0,
+      diskUsedBytes: 0,
+      netRxBytes: 0,
+      netTxBytes: 0,
+      load1: 0,
+      load5: 0,
+      temperatureCelsius: 0,
+      containerRunning: n.containers_running ?? 0,
+      containerTotal: 0,
+    },
+    registeredAt: '',
+    lastSeenAt: n.last_seen_at || '',
+  }
+}
+
+async function load() {
+  loading.value = true
+  try {
+    const rows = await api.listNodes()
+    usingMock.value = false
+    nodes.value = rows.map(mapRow)
+  } catch (e) {
+    // 后端未启动或离线：回退 mock，保证页面可用
+    usingMock.value = true
+    nodes.value = mockNodes
+    ElMessage.warning('后端未连接，已展示示例数据')
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(load)
 </script>
 
 <template>
@@ -29,8 +96,9 @@ const onlineCount = computed(() => nodes.value.filter((n) => n.status === 'onlin
     <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px">
       <div class="text-secondary" style="font-size: 13px">
         共 {{ nodes.length }} 个节点，{{ onlineCount }} 个在线
+        <el-tag v-if="usingMock" size="small" type="warning" style="margin-left: 8px">示例数据</el-tag>
       </div>
-      <el-button type="primary" :icon="Monitor">纳管新节点</el-button>
+      <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
     </div>
 
     <div class="node-grid">
@@ -38,18 +106,18 @@ const onlineCount = computed(() => nodes.value.filter((n) => n.status === 'onlin
         <div class="node-card-head">
           <div class="node-name">
             <span class="status-dot" :class="node.status === 'online' ? 'is-online' : 'is-offline'" />
-            {{ node.hostname }}
+            {{ node.hostname || node.id }}
           </div>
           <span class="status-tag" :class="node.status === 'online' ? 'is-online' : 'is-offline'">
             {{ node.status === 'online' ? '在线' : '离线' }}
           </span>
         </div>
 
-        <div class="node-ip mono">{{ node.tailscaleIp }}</div>
+        <div class="node-ip mono">{{ node.tailscaleIp || '—' }}</div>
 
         <div class="node-meta">
           <span class="chip">{{ node.arch }}</span>
-          <span class="chip">{{ node.osVersion }}</span>
+          <span class="chip">{{ node.osVersion || node.os }}</span>
           <span class="chip">Agent {{ node.agentVersion }}</span>
         </div>
 
@@ -131,8 +199,7 @@ const onlineCount = computed(() => nodes.value.filter((n) => n.status === 'onlin
         </span>
       </div>
       <div class="card-body text-secondary" style="font-size: 13px; line-height: 1.8">
-        当前展示的是 mock 数据，数值取自 Orange Pi 3B 真机实测（内存 3.8 GiB、磁盘 232G、负载 8.11、温度 56.1°C）。
-        控制面按需上线，节点在控制面离线期间按最后下发的配置自治运行，数据本地缓存后补传。
+        控制台已接通真实后端接口（控制面不在线时回退示例数据）。节点在控制面离线期间按最后下发的配置自治运行，数据本地缓存后补传。
       </div>
     </div>
   </div>
