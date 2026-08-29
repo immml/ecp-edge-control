@@ -1,0 +1,224 @@
+// Package store 封装控制面的持久化。
+//
+// 一期用 SQLite（纯 Go 驱动，Agent 侧要 CGO_ENABLED=0 静态编译），
+// 接口已按 PostgreSQL 的形状预留，将来换驱动不动业务代码。
+package store
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
+
+	"ecp.dev/ecp/server/internal/store/model"
+)
+
+// 已知错误
+var (
+	ErrNotFound      = errors.New("记录不存在")
+	ErrAlreadyExists = errors.New("记录已存在")
+)
+
+// Store 是控制面的数据访问入口。
+type Store struct {
+	db  *gorm.DB
+	log *slog.Logger
+}
+
+// Open 打开数据库并自动迁移表结构。
+//
+// SQLite 强制启用 WAL：控制面与可能的备份进程会并发读写，
+// WAL 能避免读写互相阻塞。
+func Open(driver, dsn string, log *slog.Logger) (*Store, error) {
+	if driver != "sqlite" {
+		return nil, fmt.Errorf("不支持的存储驱动: %s（一期仅实现 sqlite）", driver)
+	}
+
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		Logger: gormlogger.Default.LogMode(gormlogger.Silent),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("打开数据库失败: %w", err)
+	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("获取底层连接失败: %w", err)
+	}
+	// 控制面是单进程，连接池保持小即可
+	sqlDB.SetMaxOpenConns(1)
+	if _, err := sqlDB.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		return nil, fmt.Errorf("启用 WAL 失败: %w", err)
+	}
+	if _, err := sqlDB.Exec("PRAGMA foreign_keys=ON"); err != nil {
+		return nil, fmt.Errorf("启用外键约束失败: %w", err)
+	}
+
+	s := &Store{db: db, log: log}
+	if err := db.AutoMigrate(model.All()...); err != nil {
+		return nil, fmt.Errorf("自动迁移失败: %w", err)
+	}
+	return s, nil
+}
+
+// Close 关闭数据库连接。
+func (s *Store) Close() error {
+	sqlDB, err := s.db.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.Close()
+}
+
+// DB 返回底层句柄。仅用于尚未抽象成方法的查询，
+// 新代码应优先在本包内加方法。
+func (s *Store) DB() *gorm.DB { return s.db }
+
+// Tables 返回当前数据库中已存在的表名，用于启动自检。
+func (s *Store) Tables() []string {
+	var names []string
+	_ = s.db.Raw("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").
+		Scan(&names).Error
+	return names
+}
+
+// ============================================================
+// 节点
+// ============================================================
+
+// UpsertNode 创建或更新节点。
+func (s *Store) UpsertNode(n *model.Node) error {
+	return s.db.Save(n).Error
+}
+
+// GetNode 按 ID 查询节点，不存在返回 ErrNotFound。
+func (s *Store) GetNode(id string) (*model.Node, error) {
+	var n model.Node
+	if err := s.db.Where("id = ?", id).First(&n).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &n, nil
+}
+
+// ListNodes 返回全部节点，按主机名排序。
+func (s *Store) ListNodes() ([]model.Node, error) {
+	var out []model.Node
+	if err := s.db.Order("hostname asc").Find(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// UpdateNodeStatus 更新节点在线状态与最后见到的时间。
+func (s *Store) UpdateNodeStatus(id, status string, caps string) error {
+	return s.db.Model(&model.Node{}).
+		Where("id = ?", id).
+		Updates(map[string]any{
+			"status":       status,
+			"capabilities": caps,
+			"last_seen_at": time.Now(),
+		}).Error
+}
+
+// ============================================================
+// 注册 Key 与指纹（"上线即控"的核心）
+// ============================================================
+
+// CreateKey 登记一个新的注册 Key。只存哈希。
+func (s *Store) CreateKey(k *model.RegistrationKey) error {
+	return s.db.Create(k).Error
+}
+
+// GetKeyByHash 按哈希查找注册 Key。
+func (s *Store) GetKeyByHash(hash string) (*model.RegistrationKey, error) {
+	var k model.RegistrationKey
+	if err := s.db.Where("key_hash = ?", hash).First(&k).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &k, nil
+}
+
+// GetFingerprint 查询节点已绑定的指纹。
+func (s *Store) GetFingerprint(nodeID string) (*model.NodeFingerprint, error) {
+	var f model.NodeFingerprint
+	if err := s.db.Where("node_id = ?", nodeID).First(&f).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &f, nil
+}
+
+// BindFingerprint 绑定节点的硬件指纹。首次注册时调用一次。
+func (s *Store) BindFingerprint(nodeID, fingerprint string) error {
+	f := &model.NodeFingerprint{
+		NodeID:      nodeID,
+		Fingerprint: fingerprint,
+		BoundAt:     time.Now(),
+	}
+	return s.db.Create(f).Error
+}
+
+// ============================================================
+// 审计日志（append-only）
+// ============================================================
+
+// AppendAudit 写入审计日志。这是本包中唯一允许写 audit_logs 的方法，
+// 且刻意不提供 Update / Delete——审计不可篡改是合规底线。
+func (s *Store) AppendAudit(a *model.AuditLog) error {
+	if a.Ts.IsZero() {
+		a.Ts = time.Now()
+	}
+	return s.db.Create(a).Error
+}
+
+// ListAudit 按条件查询审计日志，按时间倒序。
+func (s *Store) ListAudit(nodeID, action string, limit int) ([]model.AuditLog, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	q := s.db.Model(&model.AuditLog{})
+	if nodeID != "" {
+		q = q.Where("node_id = ?", nodeID)
+	}
+	if action != "" {
+		q = q.Where("action = ?", action)
+	}
+	var out []model.AuditLog
+	if err := q.Order("ts desc").Limit(limit).Find(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ============================================================
+// 节点地址（替代被砍掉的 Worker KV）
+// ============================================================
+
+// SaveAddress 记录节点的已知地址。
+func (s *Store) SaveAddress(a *model.NodeAddress) error {
+	if a.LastSeenAt.IsZero() {
+		a.LastSeenAt = time.Now()
+	}
+	return s.db.Save(a).Error
+}
+
+// ListAddresses 返回节点的全部已知地址。
+func (s *Store) ListAddresses(nodeID string) ([]model.NodeAddress, error) {
+	var out []model.NodeAddress
+	if err := s.db.Where("node_id = ?", nodeID).Find(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}
