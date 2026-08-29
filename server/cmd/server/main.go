@@ -11,6 +11,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
+	"mime"
 	"net/http"
 	"os"
 	"os/signal"
@@ -140,10 +141,16 @@ func main() {
 	engine.NoRoute(func(c *gin.Context) {
 		// 静态资源：内置前端（embed 目录名 spa），未命中则回退首页（SPA history 模式）
 		data, err := web.FS().ReadFile("spa" + c.Request.URL.Path)
+		ct := mime.TypeByExtension(filepath.Ext(c.Request.URL.Path))
 		if err != nil {
+			// 路径未命中 → 回退首页（SPA 路由由前端处理）
 			data, _ = web.FS().ReadFile("spa/index.html")
+			ct = "text/html; charset=utf-8"
 		}
-		c.Data(http.StatusOK, "text/html; charset=utf-8", data)
+		if ct == "" {
+			ct = "application/octet-stream"
+		}
+		c.Data(http.StatusOK, ct, data)
 	})
 
 	srv := &http.Server{
