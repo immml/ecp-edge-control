@@ -1,0 +1,387 @@
+/* 边缘节点控制台 · 全局样式
+ *
+ * 视觉基准：Cloudflare Dashboard 的观感 —— 浅色侧边栏、细边框卡片、
+ * 克制的阴影、大量留白。主题色 #6b37c9（老板指定）。
+ */
+
+:root {
+  /* 主题色 */
+  --color-primary: #6b37c9;
+  --color-primary-hover: #5a2da8;
+  --color-primary-active: #4c2592;
+  --color-primary-light: #f4effc;
+  --color-primary-border: #ddd0f5;
+
+  /* 表面 */
+  --sidebar-bg: #fbfbfd;
+  --page-bg: #f7f8fa;
+  --card-bg: #ffffff;
+  --surface-hover: #f6f7f9;
+  --border-color: #e6e8eb;
+  --border-strong: #d3d7dd;
+
+  /* 文字 */
+  --text-primary: #1b1d21;
+  --text-regular: #45494f;
+  --text-secondary: #6d7278;
+  --text-placeholder: #9aa0a6;
+
+  /* 语义色 */
+  --color-online: #16a34a;
+  --color-online-bg: #e8f6ed;
+  --color-offline: #8b9198;
+  --color-offline-bg: #f1f2f4;
+  --color-warning: #b45309;
+  --color-warning-bg: #fdf3e3;
+  --color-danger: #c22e2e;
+  --color-danger-bg: #fbeaea;
+
+  --radius: 6px;
+  --radius-lg: 8px;
+  --shadow-card: 0 1px 1px rgba(27, 29, 33, 0.03);
+  --shadow-hover: 0 2px 8px rgba(27, 29, 33, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  background: var(--page-bg);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- 布局骨架 ---------- */
+
+.layout {
+  display: flex;
+  height: 100%;
+}
+
+.sidebar {
+  width: 232px;
+  flex-shrink: 0;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-brand {
+  height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 18px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.sidebar-brand .brand-mark {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  background: var(--color-primary);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.sidebar-nav {
+  flex: 1;
+  padding: 12px 10px;
+  overflow-y: auto;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  margin-bottom: 2px;
+  border-radius: var(--radius);
+  color: var(--text-regular);
+  text-decoration: none;
+  font-size: 13.5px;
+  transition: background 0.12s, color 0.12s;
+}
+
+.nav-item:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.nav-item.is-active {
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  font-weight: 500;
+}
+
+.nav-item .el-icon {
+  font-size: 15px;
+}
+
+.sidebar-footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.page-header {
+  height: 56px;
+  flex-shrink: 0;
+  background: var(--card-bg);
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+}
+
+.page-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.page-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+}
+
+/* ---------- 卡片 ---------- */
+
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+}
+
+.card-header {
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 13.5px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.card-body {
+  padding: 16px;
+}
+
+/* ---------- 节点卡片 ---------- */
+
+.node-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.node-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 16px;
+  transition: box-shadow 0.15s, border-color 0.15s;
+}
+
+.node-card:hover {
+  box-shadow: var(--shadow-hover);
+  border-color: var(--border-strong);
+}
+
+.node-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 3px;
+}
+
+.node-name {
+  font-size: 14.5px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+}
+
+.node-ip {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  margin-bottom: 14px;
+}
+
+.node-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.node-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-color);
+}
+
+/* ---------- 状态 ---------- */
+
+.status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 7px;
+  vertical-align: middle;
+}
+
+.status-dot.is-online {
+  background: var(--color-online);
+}
+
+.status-dot.is-offline {
+  background: var(--color-offline);
+}
+
+.status-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 18px;
+}
+
+.status-tag.is-online {
+  background: var(--color-online-bg);
+  color: var(--color-online);
+}
+
+.status-tag.is-offline {
+  background: var(--color-offline-bg);
+  color: var(--color-offline);
+}
+
+/* ---------- 指标 ---------- */
+
+.metric {
+  margin-bottom: 11px;
+}
+
+.metric:last-child {
+  margin-bottom: 0;
+}
+
+.metric-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 5px;
+}
+
+.metric-value {
+  color: var(--text-regular);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 标签 ---------- */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 11.5px;
+  background: var(--surface-hover);
+  color: var(--text-regular);
+  border: 1px solid var(--border-color);
+}
+
+.chip.is-ok {
+  background: var(--color-online-bg);
+  color: var(--color-online);
+  border-color: transparent;
+}
+
+.chip.is-warn {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+  border-color: transparent;
+}
+
+/* ---------- 工具 ---------- */
+
+.text-secondary {
+  color: var(--text-secondary);
+}
+
+.mono {
+  font-family: 'JetBrains Mono', 'SF Mono', Consolas, 'Courier New', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.terminal-container {
+  background: #0d1117;
+  border-radius: var(--radius);
+  padding: 10px;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* ---------- Element Plus 主题对齐 ---------- */
+
+.el-button--primary {
+  --el-button-bg-color: var(--color-primary);
+  --el-button-border-color: var(--color-primary);
+  --el-button-hover-bg-color: var(--color-primary-hover);
+  --el-button-hover-border-color: var(--color-primary-hover);
+  --el-button-active-bg-color: var(--color-primary-active);
+  --el-button-active-border-color: var(--color-primary-active);
+}
+
+.el-progress-bar__inner {
+  background-color: var(--color-primary);
+}
+
+.el-link.el-link--primary {
+  --el-link-text-color: var(--color-primary);
+  --el-link-hover-text-color: var(--color-primary-hover);
+}
