@@ -18,6 +18,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"time"
@@ -176,7 +177,7 @@ func (c *CA) SignClientCertReturnSerial(nodeID string, csrPEM []byte, ttl time.D
 // SignServerCert 为控制面自身签发一张服务端证书（HTTPS 与 gRPC 共用）。
 //
 // SAN 包含 localhost 与常见回环地址，方便本机与 Tailscale 域名访问。
-func (c *CA) SignServerCert(dnsNames []string, ttl time.Duration) (certPEM, keyPEM []byte, err error) {
+func (c *CA) SignServerCert(dnsNames []string, ipAddresses []net.IP, ttl time.Duration) (certPEM, keyPEM []byte, err error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, nil, fmt.Errorf("生成服务端密钥失败: %w", err)
@@ -193,6 +194,7 @@ func (c *CA) SignServerCert(dnsNames []string, ttl time.Duration) (certPEM, keyP
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		DNSNames:     dnsNames,
+		IPAddresses:  ipAddresses,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, c.cert, &key.PublicKey, c.key)
 	if err != nil {

@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"mime"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -170,7 +171,11 @@ func main() {
 		Addr:    cfg.Server.Listen,
 		Handler: engine,
 	}
-	if cert, key, err := caInstance.SignServerCert([]string{"localhost", "ecp-control"}, 8760*time.Hour); err == nil {
+	if cert, key, err := caInstance.SignServerCert(
+		[]string{"localhost", "ecp-control"},
+		[]net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		8760*time.Hour,
+	); err == nil {
 		if tlsCert, err := tls.X509KeyPair(cert, key); err == nil {
 			srv.TLSConfig = &tls.Config{Certificates: []tls.Certificate{tlsCert}}
 		}

@@ -478,7 +478,11 @@ func (s *Server) audit(nodeID, action, result, detail string) {
 
 // TLSConfig 构造服务端 TLS 配置：内置 CA 校验客户端证书（VerifyClientCertIfGiven）。
 func (s *Server) TLSConfig() (*tls.Config, error) {
-	serverCert, serverKey, err := s.ca.SignServerCert([]string{"localhost", "ecp-control"}, 8760*time.Hour)
+	serverCert, serverKey, err := s.ca.SignServerCert(
+		[]string{"localhost", "ecp-control"},
+		[]net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		8760*time.Hour,
+	)
 	if err != nil {
 		return nil, err
 	}
