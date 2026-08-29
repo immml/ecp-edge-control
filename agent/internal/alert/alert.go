@@ -77,25 +77,42 @@ func (e *Engine) LoadRules() error {
 		}
 		return err
 	}
-	var rules []Rule
-	if err := yaml.Unmarshal(data, &rules); err != nil {
+	rules, err := parseRules(data)
+	if err != nil {
 		return err
 	}
 	e.rules = rules
 	return nil
 }
 
+// parseRules 兼容两种 YAML 形态：
+//   - 顶层规则列表（引擎原生格式）
+//   - { rules: [...] } 包裹（常见样例/部署格式）
+func parseRules(data []byte) ([]Rule, error) {
+	var list []Rule
+	if err := yaml.Unmarshal(data, &list); err == nil {
+		return list, nil
+	}
+	var wrapped struct {
+		Rules []Rule `yaml:"rules"`
+	}
+	if err := yaml.Unmarshal(data, &wrapped); err != nil {
+		return nil, err
+	}
+	return wrapped.Rules, nil
+}
+
 // ApplyRules 控制面下发规则：落盘到 RulesFile 并重载。
 func (e *Engine) ApplyRules(yamlBytes []byte) error {
 	// 先尝试解析，避免写入非法内容覆盖现有规则
-	var probe []Rule
-	if err := yaml.Unmarshal(yamlBytes, &probe); err != nil {
+	if _, err := parseRules(yamlBytes); err != nil {
 		return err
 	}
 	if err := os.WriteFile(e.cfg.Alert.RulesFile, yamlBytes, 0o600); err != nil {
 		return err
 	}
-	e.rules = probe
+	rules, _ := parseRules(yamlBytes)
+	e.rules = rules
 	return nil
 }
 
