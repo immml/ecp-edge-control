@@ -57,7 +57,8 @@
 | **#7** | `81357ef` | `feat(console): 实现 REST API、  JWT/RBAC 与前端接通后端（T3）` | T3 控制台 | auth/command/api/web 包；前端 client/LoginView/auth store；指令下发闭环 |
 | **#8** | `203cfa1` | `feat(agent): 实现 Agent 真实执行器（Shell + Docker，能力分级）` | T4-A 执行器 | executor 改写：SHELL 真实执行 + 提权降级；Docker list/action/logs 能力门控 + 标签隔离；单元测试通过 |
 | **#9** | `e00fdcf` | `feat(agent,server): 指标采集 + 告警引擎 + 飞书推送（B+C）` | T4-B/C | collector(gopsutil) + alert(阈值/离线规则 + 飞书机器人) + server 遥测落 SQLite；Webhook 走 env ECP_FEISHU_WEBHOOK |
-| — | 待提交 | 测试通过 | Orange Pi 真机端到端验证 |
+| **#10** | `de45c48` | `fix(agent,server): 真机联调 D 修复——流接收/身份持久化/指令参数/keygen` | T4-D 联调修复 | 并发 Recv 破坏流 / NodeID 重启丢失(node_id mismatch) / 指令参数结构 / server keygen 子命令；补 B+C 遗漏文件 |
+| — | 待提交 | 测试通过 | Orange Pi 真机端到端验证（指令回执 live 复测待 Pi 网络恢复） |
 
 回滚方式：`git revert <commit>` 或 `git reset --hard <编号对应 commit hash>`
 
