@@ -122,9 +122,9 @@ func (s *Store) UpdateNodeStatus(id, status string, caps string) error {
 	return s.db.Model(&model.Node{}).
 		Where("id = ?", id).
 		Updates(map[string]any{
-			"status":       status,
-			"capabilities": caps,
-			"last_seen_at": time.Now(),
+			"status":            status,
+			"capabilities_json": caps,
+			"last_seen_at":      time.Now(),
 		}).Error
 }
 
@@ -140,7 +140,7 @@ func (s *Store) UpdateAgentVersion(id, version string) error {
 // UpdateCapabilities 仅更新能力 JSON。
 func (s *Store) UpdateCapabilities(id, caps string) error {
 	return s.db.Model(&model.Node{}).Where("id = ?", id).
-		UpdateColumn("capabilities", caps).Error
+		UpdateColumn("capabilities_json", caps).Error
 }
 
 // ============================================================
