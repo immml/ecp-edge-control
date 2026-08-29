@@ -25,7 +25,11 @@ type Manager struct {
 	ttl       time.Duration
 	telemetry map[string]*ecpv1.Telemetry
 	waiters   map[string]chan *ecpv1.CommandResult
+	termSinks map[string]TerminalSink // session_id -> 终端上行回调
 }
+
+// TerminalSink 是终端 pty 输出的回调（由 WebSocket 会话注册）。
+type TerminalSink func(d *ecpv1.TerminalData)
 
 // New 创建会话管理器。ttl 控制"多久没心跳算离线"。
 func New(ttl time.Duration) *Manager {
@@ -36,6 +40,7 @@ func New(ttl time.Duration) *Manager {
 		sessions:  make(map[string]*Session),
 		telemetry: make(map[string]*ecpv1.Telemetry),
 		waiters:   make(map[string]chan *ecpv1.CommandResult),
+		termSinks: make(map[string]TerminalSink),
 		ttl:       ttl,
 	}
 }
@@ -101,6 +106,30 @@ func (m *Manager) IsOnline(nodeID string) bool {
 		return false
 	}
 	return time.Since(s.LastSeen) <= m.ttl
+}
+
+// RegisterTerminalSink 为终端会话注册 pty 输出回调。
+func (m *Manager) RegisterTerminalSink(sessionID string, sink TerminalSink) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.termSinks[sessionID] = sink
+}
+
+// UnregisterTerminalSink 注销终端回调。
+func (m *Manager) UnregisterTerminalSink(sessionID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.termSinks, sessionID)
+}
+
+// DeliverTerminal 把 Agent 上行的 pty 输出路由到对应 WebSocket 会话。
+func (m *Manager) DeliverTerminal(d *ecpv1.TerminalData) {
+	m.mu.RLock()
+	sink, ok := m.termSinks[d.GetSessionId()]
+	m.mu.RUnlock()
+	if ok && sink != nil {
+		sink(d)
+	}
 }
 
 // PutTelemetry 缓存节点最新遥测点。

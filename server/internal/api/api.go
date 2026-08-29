@@ -62,6 +62,8 @@ func New(st *store.Store, sessions *session.Manager, dispatch *command.Dispatche
 	r.Use(gin.Recovery())
 
 	r.POST("/api/v1/login", h.Login)
+	// WebSocket 无法携带 Authorization header，终端走 query token 自校验
+	r.GET("/api/v1/nodes/:id/terminal/ws", h.TerminalWS)
 
 	api := r.Group("/api/v1")
 	api.Use(h.JWTAuth())

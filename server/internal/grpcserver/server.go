@@ -243,6 +243,8 @@ func (s *Server) handleAgentMessage(sess *session.Session, msg *ecpv1.AgentMessa
 				s.log.Warn("能力落库失败", "node_id", msg.NodeId, "err", err)
 			}
 		}
+	case *ecpv1.AgentMessage_TerminalData:
+		s.sessions.DeliverTerminal(p.TerminalData)
 	case *ecpv1.AgentMessage_Event:
 		s.log.Info("收到节点事件", "node_id", msg.NodeId, "kind", p.Event.Kind)
 	}

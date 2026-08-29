@@ -209,6 +209,7 @@ message AgentMessage {
     CommandResult result = 3;
     CapabilityReport capabilities = 4;
     NodeEvent event = 5;
+    TerminalData terminal_data = 6;   // 终端 pty 输出上行
   }
 }
 
@@ -220,6 +221,7 @@ message ControlMessage {
     ConfigPush config_push = 3;
     HeartbeatAck heartbeat_ack = 4;
     AlertRuleSync alert_rules = 5;
+    TerminalControl terminal = 6;     // 终端会话控制下行
   }
 }
 
@@ -232,6 +234,25 @@ enum TunnelSessionType {
   TUNNEL_SESSION_TYPE_TERMINAL = 1;      // pty 终端
   TUNNEL_SESSION_TYPE_FILE = 2;          // 文件读写
   TUNNEL_SESSION_TYPE_PORT_FORWARD = 3;  // 1Panel 等本地服务端口转发
+}
+
+// 终端会话控制（下行：控制面 -> Agent），沿 CommandStream 承载。
+// open 帧到达后 Agent 起 pty；data 帧为浏览器输入；resize/close 同步尺寸与退出。
+message TerminalControl {
+  string session_id = 1;
+  oneof frame {
+    TunnelOpen open = 2;
+    bytes data = 3;
+    TunnelResize resize = 4;
+    TunnelClose close = 5;
+  }
+}
+
+// 终端输出（上行：Agent -> 控制面）。
+message TerminalData {
+  string session_id = 1;
+  bytes data = 2;      // pty 输出字节
+  bool closed = 3;     // 会话已结束（进程退出 / 通道关闭）
 }
 
 message TunnelOpen {

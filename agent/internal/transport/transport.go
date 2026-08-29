@@ -31,26 +31,29 @@ import (
 
 // Transport 管理 Agent 到控制面的连接。
 type Transport struct {
-	cfg        *config.Config
-	log        *slog.Logger
-	exec       *executor.Executor
-	cache      *cache.Cache
+	cfg         *config.Config
+	log         *slog.Logger
+	exec        *executor.Executor
+	cache       *cache.Cache
 	alertEngine *alert.Engine
-	coll       *collector.Collector
+	coll        *collector.Collector
+	term        *terminalManager
 }
 
 // New 构造传输管理器。cache 用于本地遥测落库与告警记录；
 // 构造时探测能力并实例化管理器/采集器/告警引擎。
 func New(cfg *config.Config, log *slog.Logger, ch *cache.Cache) *Transport {
 	c := caps.Probe()
-	return &Transport{
-		cfg:        cfg,
-		log:        log,
-		exec:       executor.New(cfg),
-		cache:      ch,
+	t := &Transport{
+		cfg:         cfg,
+		log:         log,
+		exec:        executor.New(cfg),
+		cache:       ch,
 		alertEngine: alert.New(cfg, ch, log),
-		coll:       collector.New(c),
+		coll:        collector.New(c),
+		term:        newTerminalManager(),
 	}
+	return t
 }
 
 // Run 是 Agent 常驻主循环。阻塞直至 ctx 取消。会自动注册、建流、重连。
@@ -164,6 +167,14 @@ func (t *Transport) streamLoop(ctx context.Context, conn *grpc.ClientConn, id *r
 		Payload: &ecpv1.AgentMessage_Capabilities{Capabilities: capsToProto(s)},
 	})
 
+	// 终端上行发送器绑定当前流（流重连后自动换绑）
+	t.term.send = func(d *ecpv1.TerminalData) error {
+		return stream.Send(&ecpv1.AgentMessage{
+			NodeId:  id.NodeID,
+			Payload: &ecpv1.AgentMessage_TerminalData{TerminalData: d},
+		})
+	}
+
 	// 单一常驻接收协程：只在这里调用 stream.Recv()，避免并发 Recv 破坏流。
 	// 指令回执由该协程内的 handleCommand 通过同一流 Send，Send 与 Recv 分属不同方向，合规。
 	recvErr := make(chan error, 1)
@@ -183,6 +194,9 @@ func (t *Transport) streamLoop(ctx context.Context, conn *grpc.ClientConn, id *r
 				} else {
 					t.log.Info("已应用控制面下发的告警规则", "version", sync.GetVersion())
 				}
+			}
+			if tc := msg.GetTerminal(); tc != nil {
+				go t.term.Handle(tc)
 			}
 		}
 	}()
