@@ -12,8 +12,11 @@ import (
 	"encoding/pem"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
+	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc"
@@ -274,7 +277,51 @@ func (t *Transport) nodeInfo(host string) *ecpv1.NodeInfo {
 		Arch:         runtime.GOARCH,
 		Os:           runtime.GOOS,
 		AgentVersion: "0.1.0",
+		TailscaleIp:  detectTailscaleIP(),
 	}
+}
+
+// detectTailscaleIP 探测本节点 Tailscale IPv4（100.64.0.0/10 段）。
+// 优先 tailscale CLI，失败则扫网卡兜底；都不是返回空串。
+func detectTailscaleIP() string {
+	if out, err := exec.Command("tailscale", "ip", "-4").Output(); err == nil {
+		first := strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
+		if strings.HasPrefix(first, "100.") {
+			return first
+		}
+	}
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	for _, ifc := range ifaces {
+		if ifc.Flags&net.FlagLoopback != 0 || ifc.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, _ := ifc.Addrs()
+		for _, a := range addrs {
+			var ip net.IP
+			switch v := a.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip != nil && ip.To4() != nil && isTailscaleIP(ip) {
+				return ip.String()
+			}
+		}
+	}
+	return ""
+}
+
+// isTailscaleIP 判断是否 CGNAT 段 100.64.0.0/10。
+func isTailscaleIP(ip net.IP) bool {
+	b := ip.To4()
+	if b == nil {
+		return false
+	}
+	return b[0] == 100 && b[1] >= 64 && b[1] <= 127
 }
 
 // collectAndBuildHeartbeat 采集一次遥测并构造心跳帧。

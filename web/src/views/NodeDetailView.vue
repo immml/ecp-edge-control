@@ -73,6 +73,16 @@ function timeLabel(i: number): string {
   if (!t) return ''
   return new Date(t.ts).toLocaleTimeString('zh-CN', { hour12: false })
 }
+
+// 远程打开节点 1Panel（优先 Tailscale IP，跨网可用；仅做网络可达，不绕过其鉴权）
+function openPanel() {
+  const ip = node.value?.tailscale_ip
+  if (!ip) {
+    ElMessage.warning('该节点没有可用的 Tailscale IP，无法远程打开 1Panel')
+    return
+  }
+  window.open(`http://${ip}:31252`, '_blank', 'noopener')
+}
 </script>
 
 <template>
@@ -85,6 +95,7 @@ function timeLabel(i: number): string {
       </span>
       <span class="text-secondary" style="font-size: 12px">{{ node.id }}</span>
       <span style="flex: 1"></span>
+      <el-button size="small" :disabled="!node.tailscale_ip" @click="openPanel">1Panel</el-button>
       <el-button size="small" :icon="'Refresh'" :loading="loading" @click="load">刷新</el-button>
     </div>
 

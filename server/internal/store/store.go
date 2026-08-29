@@ -137,6 +137,15 @@ func (s *Store) UpdateAgentVersion(id, version string) error {
 		UpdateColumn("agent_version", version).Error
 }
 
+// UpdateTailscaleIP 更新节点 Tailscale IP。
+func (s *Store) UpdateTailscaleIP(id, tsIP string) error {
+	if tsIP == "" {
+		return nil
+	}
+	return s.db.Model(&model.Node{}).Where("id = ?", id).
+		UpdateColumn("tailscale_ip", tsIP).Error
+}
+
 // UpdateCapabilities 仅更新能力 JSON。
 func (s *Store) UpdateCapabilities(id, caps string) error {
 	return s.db.Model(&model.Node{}).Where("id = ?", id).

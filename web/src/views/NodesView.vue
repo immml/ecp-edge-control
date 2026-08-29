@@ -15,6 +15,16 @@ const usingMock = ref(false)
 
 const onlineCount = computed(() => nodes.value.filter((n) => n.status === 'online').length)
 
+// 远程打开节点 1Panel（Tailscale IP 跨网可达；仅网络可达，不绕过其鉴权）
+function openPanel(n: ApiNode) {
+  const ip = n.tailscale_ip
+  if (!ip) {
+    ElMessage.warning('该节点没有可用的 Tailscale IP，无法远程打开 1Panel')
+    return
+  }
+  window.open(`http://${ip}:31252`, '_blank', 'noopener')
+}
+
 function capabilityChips(n: ApiNode) {
   const c = n.capabilities ?? ({} as any)
   return [
@@ -133,6 +143,7 @@ onMounted(load)
         </div>
 
         <div class="node-actions">
+          <el-button size="small" :disabled="!node.tailscale_ip" @click="openPanel(node)">1Panel</el-button>
           <el-button size="small" :disabled="node.status !== 'online'" @click="router.push(`/nodes/${node.id}/terminal`)">
             终端
           </el-button>

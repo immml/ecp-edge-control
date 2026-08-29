@@ -197,6 +197,13 @@ func (s *Server) CommandStream(stream ecpv1.AgentService_CommandStreamServer) er
 		}
 	}
 
+	// 对端 IP 兜底更新 Tailscale IP（agent 走 Tailscale 连接时即为其 100.x 地址）
+	if tsIP := peerTailscaleIP(ctx); tsIP != "" {
+		if uerr := s.store.UpdateTailscaleIP(nodeID, tsIP); uerr != nil {
+			s.log.Warn("更新 Tailscale IP 失败", "node_id", nodeID, "err", uerr)
+		}
+	}
+
 	for {
 		msg, err := stream.Recv()
 		if err != nil {
@@ -248,6 +255,28 @@ func (s *Server) handleAgentMessage(sess *session.Session, msg *ecpv1.AgentMessa
 	case *ecpv1.AgentMessage_Event:
 		s.log.Info("收到节点事件", "node_id", msg.NodeId, "kind", p.Event.Kind)
 	}
+}
+
+// peerTailscaleIP 从 gRPC 对端地址里提取 Tailscale IPv4（100.64.0.0/10）。
+// Agent 走 Tailscale 连控制面时，对端 IP 即其 100.x 地址。
+func peerTailscaleIP(ctx context.Context) string {
+	p, ok := peer.FromContext(ctx)
+	if !ok {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(p.Addr.String())
+	if err != nil {
+		return ""
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || ip.To4() == nil {
+		return ""
+	}
+	b := ip.To4()
+	if b[0] == 100 && b[1] >= 64 && b[1] <= 127 {
+		return ip.String()
+	}
+	return ""
 }
 
 // verifyClientCert 从流上下文提取并校验客户端证书：必须存在、由本 CA 签发、
