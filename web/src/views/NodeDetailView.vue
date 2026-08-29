@@ -1,25 +1,91 @@
 <script setup lang="ts">
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 
-import { mockContainers, mockNodes } from '@/mock/nodes'
+import { api, type TelemetrySample } from '@/api/client'
+import { mockNodes } from '@/mock/nodes'
 import { formatBytes, percent, timeAgo } from '@/utils/format'
 
 const route = useRoute()
 const router = useRouter()
 const nodeId = route.params.id as string
-const node = mockNodes.find((n) => n.id === nodeId)
 
-const caps = node?.capabilities
+const loading = ref(true)
+const node = ref<any>(null)
+const online = ref(false)
+const history = ref<TelemetrySample[]>([]) // 升序（旧→新）
+
+async function load() {
+  try {
+    const d = await api.getNode(nodeId)
+    node.value = d.node
+    online.value = d.online
+  } catch (e: any) {
+    // 控制面离线时回退到示例数据，保持页面可浏览
+    node.value = mockNodes.find((n: any) => n.id === nodeId) ?? null
+    online.value = node.value?.status === 'online'
+    ElMessage.warning(`节点信息回退示例数据：${e?.message ?? '未知错误'}`)
+  }
+  try {
+    const t = await api.getTelemetry(nodeId, 120)
+    history.value = (t.items ?? []).slice().reverse()
+  } catch {
+    history.value = []
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(() => {
+  load()
+  timer = window.setInterval(load, 15000)
+})
+onBeforeUnmount(() => window.clearInterval(timer))
+let timer = 0
+
+const latest = computed<TelemetrySample | null>(() =>
+  history.value.length ? history.value[history.value.length - 1] : null,
+)
+const memPct = computed(() => latest.value ? percent(latest.value.mem_used_bytes, latest.value.mem_total_bytes) : 0)
+const diskPct = computed(() => latest.value ? percent(latest.value.disk_used_bytes, latest.value.disk_total_bytes) : 0)
+
+// ---- SVG 折线图 ----
+function series(key: (t: TelemetrySample) => number): { pts: string; max: number } {
+  const data = history.value.map(key).filter((v) => Number.isFinite(v))
+  if (data.length < 2) return { pts: '', max: 100 }
+  const max = Math.max(...data, 1) * 1.1
+  const w = 340
+  const h = 64
+  const step = w / (data.length - 1)
+  const pts = data
+    .map((v, i) => `${(i * step).toFixed(1)},${(h - (v / max) * h).toFixed(1)}`)
+    .join(' ')
+  return { pts, max }
+}
+const cpuSeries = computed(() => series((t) => t.cpu_percent))
+const memSeries = computed(() => series((t) => percent(t.mem_used_bytes, t.mem_total_bytes)))
+const diskSeries = computed(() => series((t) => percent(t.disk_used_bytes, t.disk_total_bytes)))
+const tempSeries = computed(() => series((t) => t.temperature_celsius))
+
+function timeLabel(i: number): string {
+  const t = history.value[i]
+  if (!t) return ''
+  return new Date(t.ts).toLocaleTimeString('zh-CN', { hour12: false })
+}
 </script>
 
 <template>
   <div v-if="node" style="display: flex; flex-direction: column; gap: 16px">
     <div style="display: flex; align-items: center; gap: 10px">
       <el-button size="small" text @click="router.push('/nodes')">← 返回</el-button>
-      <span style="font-weight: 600">{{ node.hostname }}</span>
-      <span class="status-tag" :class="node.status === 'online' ? 'is-online' : 'is-offline'">
-        {{ node.status === 'online' ? '在线' : '离线' }}
+      <span style="font-weight: 600">{{ node.hostname || node.id }}</span>
+      <span class="status-tag" :class="online ? 'is-online' : 'is-offline'">
+        {{ online ? '在线' : '离线' }}
       </span>
+      <span class="text-secondary" style="font-size: 12px">{{ node.id }}</span>
+      <span style="flex: 1"></span>
+      <el-button size="small" :icon="'Refresh'" :loading="loading" @click="load">刷新</el-button>
     </div>
 
     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px">
@@ -27,118 +93,101 @@ const caps = node?.capabilities
         <div class="card-header">系统信息</div>
         <div class="card-body">
           <el-descriptions :column="1" size="small" border>
-            <el-descriptions-item label="主机名">{{ node.hostname }}</el-descriptions-item>
-            <el-descriptions-item label="Tailscale IP">
-              <span class="mono">{{ node.tailscaleIp }}</span>
+            <el-descriptions-item label="主机名">{{ node.hostname || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="节点 ID">
+              <span class="mono">{{ node.id }}</span>
             </el-descriptions-item>
             <el-descriptions-item label="架构">{{ node.arch }}</el-descriptions-item>
-            <el-descriptions-item label="系统">{{ node.osVersion }}</el-descriptions-item>
-            <el-descriptions-item label="内核">
-              <span class="mono">{{ node.kernel }}</span>
-            </el-descriptions-item>
-            <el-descriptions-item label="Agent 版本">{{ node.agentVersion }}</el-descriptions-item>
-            <el-descriptions-item label="最后在线">{{ timeAgo(node.lastSeenAt) }}</el-descriptions-item>
+            <el-descriptions-item label="系统">{{ node.os }}</el-descriptions-item>
+            <el-descriptions-item label="Agent 版本">{{ node.agent_version }}</el-descriptions-item>
+            <el-descriptions-item label="最后在线">{{ timeAgo(node.last_seen_at) }}</el-descriptions-item>
           </el-descriptions>
         </div>
       </div>
 
       <div class="card">
-        <div class="card-header">资源占用</div>
+        <div class="card-header">实时资源</div>
         <div class="card-body">
-          <div class="metric">
-            <div class="metric-label">
-              <span>CPU</span><span class="metric-value">{{ node.telemetry.cpuPercent.toFixed(1) }}%</span>
+          <template v-if="latest">
+            <div class="metric">
+              <div class="metric-label">
+                <span>CPU</span>
+                <span class="metric-value">{{ latest.cpu_percent.toFixed(1) }}%</span>
+              </div>
+              <el-progress :percentage="Math.round(latest.cpu_percent)" :stroke-width="6" :show-text="false" />
             </div>
-            <el-progress :percentage="node.telemetry.cpuPercent" :stroke-width="6" :show-text="false" />
-          </div>
-          <div class="metric">
-            <div class="metric-label">
-              <span>内存</span>
-              <span class="metric-value">
-                {{ formatBytes(node.telemetry.memUsedBytes) }} / {{ formatBytes(node.telemetry.memTotalBytes) }}
-              </span>
+            <div class="metric">
+              <div class="metric-label">
+                <span>内存</span>
+                <span class="metric-value">
+                  {{ formatBytes(latest.mem_used_bytes) }} / {{ formatBytes(latest.mem_total_bytes) }}
+                </span>
+              </div>
+              <el-progress :percentage="Math.round(memPct)" :stroke-width="6" :show-text="false" />
             </div>
-            <el-progress
-              :percentage="percent(node.telemetry.memUsedBytes, node.telemetry.memTotalBytes)"
-              :stroke-width="6"
-              :show-text="false"
-            />
-          </div>
-          <div class="metric">
-            <div class="metric-label">
-              <span>磁盘</span>
-              <span class="metric-value">
-                {{ formatBytes(node.telemetry.diskUsedBytes) }} / {{ formatBytes(node.telemetry.diskTotalBytes) }}
-              </span>
+            <div class="metric">
+              <div class="metric-label">
+                <span>磁盘</span>
+                <span class="metric-value">
+                  {{ formatBytes(latest.disk_used_bytes) }} / {{ formatBytes(latest.disk_total_bytes) }}
+                </span>
+              </div>
+              <el-progress :percentage="Math.round(diskPct)" :stroke-width="6" :show-text="false" />
             </div>
-            <el-progress
-              :percentage="percent(node.telemetry.diskUsedBytes, node.telemetry.diskTotalBytes)"
-              :stroke-width="6"
-              :show-text="false"
-            />
-          </div>
-          <div style="display: flex; gap: 20px; margin-top: 14px; font-size: 12.5px">
-            <div>
-              <div class="text-secondary">负载 (1m)</div>
-              <div class="mono" style="font-size: 15px">{{ node.telemetry.load1 }}</div>
+            <div style="display: flex; gap: 20px; margin-top: 14px; font-size: 12.5px">
+              <div>
+                <div class="text-secondary">负载 (1m)</div>
+                <div class="mono" style="font-size: 15px">{{ latest.load1?.toFixed?.(2) ?? latest.load1 }}</div>
+              </div>
+              <div>
+                <div class="text-secondary">温度</div>
+                <div class="mono" style="font-size: 15px">{{ latest.temperature_celsius?.toFixed?.(1) ?? latest.temperature_celsius }}°C</div>
+              </div>
+              <div>
+                <div class="text-secondary">容器</div>
+                <div class="mono" style="font-size: 15px">{{ latest.containers_running ?? 0 }}</div>
+              </div>
             </div>
-            <div>
-              <div class="text-secondary">温度</div>
-              <div class="mono" style="font-size: 15px">{{ node.telemetry.temperatureCelsius }}°C</div>
-            </div>
-          </div>
+          </template>
+          <el-empty v-else description="暂无遥测数据（节点上线后自动采集）" :image-size="60" />
         </div>
       </div>
     </div>
 
     <div class="card">
       <div class="card-header">
-        <span>能力探测</span>
+        <span>遥测趋势</span>
         <span class="text-secondary" style="font-weight: 400; font-size: 12px">
-          以 {{ caps?.runAsUser }} (uid {{ caps?.runAsUid }}) 运行
+          最近 {{ history.length }} 个采集点 · 15s 自动刷新
         </span>
       </div>
-      <div class="card-body" style="display: flex; gap: 8px; flex-wrap: wrap">
-        <span class="chip" :class="caps?.canReadSystemStats ? 'is-ok' : 'is-warn'">系统采集</span>
-        <span class="chip" :class="caps?.canTerminal ? 'is-ok' : 'is-warn'">终端</span>
-        <span class="chip" :class="caps?.canManageFiles ? 'is-ok' : 'is-warn'">文件管理</span>
-        <span class="chip" :class="caps?.canReadDocker ? 'is-ok' : 'is-warn'">容器只读</span>
-        <span class="chip" :class="caps?.canWriteDocker ? 'is-ok' : 'is-warn'">容器写操作</span>
-        <span class="chip" :class="caps?.canManageTailscale ? 'is-ok' : 'is-warn'">Tailscale 纳管</span>
-        <span class="chip" :class="caps?.canManageNetwork ? 'is-ok' : 'is-warn'">网络控制</span>
-        <span class="chip" :class="caps?.canManageSystemd ? 'is-ok' : 'is-warn'">systemd</span>
-        <span class="chip" :class="caps?.canSelfUpgrade ? 'is-ok' : 'is-warn'">自升级</span>
+      <div class="card-body" style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px">
+        <div v-for="(g, gi) in [
+          { label: 'CPU %', pts: cpuSeries.pts, max: cpuSeries.max, color: '#6b37c9' },
+          { label: '内存 %', pts: memSeries.pts, max: memSeries.max, color: '#409eff' },
+          { label: '磁盘 %', pts: diskSeries.pts, max: diskSeries.max, color: '#67c23a' },
+          { label: '温度 °C', pts: tempSeries.pts, max: tempSeries.max, color: '#e6a23c' },
+        ]" :key="gi">
+          <div class="text-secondary" style="font-size: 12.5px; margin-bottom: 4px">
+            {{ g.label }} <span class="mono">(max {{ g.max.toFixed(0) }})</span>
+          </div>
+          <svg v-if="g.pts" viewBox="0 0 340 64" style="width: 100%; height: 64px; display: block">
+            <polyline :points="g.pts" fill="none" :stroke="g.color" stroke-width="2" stroke-linejoin="round" />
+            <circle
+              v-for="(pt, pi) in g.pts.split(' ')"
+              :key="pi"
+              :cx="pt.split(',')[0]"
+              :cy="pt.split(',')[1]"
+              r="1.6"
+              :fill="g.color"
+            />
+          </svg>
+          <el-empty v-else description="样本不足" :image-size="40" />
+          <div class="text-secondary mono" style="font-size: 11px">
+            {{ timeLabel(0) }} → {{ timeLabel(history.length - 1) }}
+          </div>
+        </div>
       </div>
-    </div>
-
-    <div class="card">
-      <div class="card-header">
-        <span>容器</span>
-        <span class="text-secondary" style="font-weight: 400; font-size: 12px">
-          仅对 ECP 纳管的容器执行写操作
-        </span>
-      </div>
-      <el-table :data="mockContainers" style="width: 100%">
-        <el-table-column prop="name" label="名称" min-width="160" />
-        <el-table-column prop="image" label="镜像" min-width="220">
-          <template #default="{ row }"><span class="mono text-secondary">{{ row.image }}</span></template>
-        </el-table-column>
-        <el-table-column prop="status" label="状态" width="180" />
-        <el-table-column label="归属" width="140">
-          <template #default="{ row }">
-            <span class="chip" :class="row.managed ? 'is-ok' : ''">
-              {{ row.managed ? 'ECP 纳管' : '节点既有业务' }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="120">
-          <template #default="{ row }">
-            <el-button size="small" text :disabled="!row.managed">
-              {{ row.managed ? '停止' : '不可操作' }}
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
     </div>
   </div>
 

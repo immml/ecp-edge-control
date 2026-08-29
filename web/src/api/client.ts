@@ -27,6 +27,33 @@ export interface LoginResult {
   role: string
 }
 
+export interface TelemetrySample {
+  id: number
+  node_id: string
+  ts: string
+  cpu_percent: number
+  mem_total_bytes: number
+  mem_used_bytes: number
+  disk_total_bytes: number
+  disk_used_bytes: number
+  net_rx_bytes: number
+  net_tx_bytes: number
+  load1: number
+  temperature_celsius: number
+  containers_running: number
+}
+
+export interface TelemetryResult {
+  items: TelemetrySample[] // 最新在前
+  latest: TelemetrySample | null
+}
+
+export interface NodeDetail {
+  node: ApiNode
+  online: boolean
+  telemetry: TelemetrySample | null
+}
+
 class ApiClient {
   private base = '/'
 
@@ -81,8 +108,12 @@ class ApiClient {
     return r.nodes
   }
 
-  async getNode(id: string): Promise<unknown> {
+  async getNode(id: string): Promise<NodeDetail> {
     return this.request('GET', `api/v1/nodes/${id}`)
+  }
+
+  async getTelemetry(nodeId: string, limit = 120): Promise<TelemetryResult> {
+    return this.request('GET', `api/v1/nodes/${nodeId}/telemetry?limit=${limit}`)
   }
 
   async audit(nodeId?: string): Promise<{ logs: any[]; total: number }> {

@@ -7,6 +7,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -196,15 +197,24 @@ func (h *Handler) GetNode(c *gin.Context) {
 	})
 }
 
-// NodeTelemetry 返回节点最新遥测。
+// NodeTelemetry 返回节点遥测历史（SQLite），?limit= 控制条数，默认 60。
 func (h *Handler) NodeTelemetry(c *gin.Context) {
 	id := c.Param("id")
-	t := h.sessions.LatestTelemetry(id)
-	if t == nil {
-		ok(c, nil)
+	limit := 60
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
+			limit = n
+		}
+	}
+	items, err := h.store.ListTelemetry(id, limit)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, codeInternal, "查询遥测历史失败")
 		return
 	}
-	ok(c, t)
+	ok(c, gin.H{
+		"items":  items, // 最新在前，画图时前端自行反转
+		"latest": h.sessions.LatestTelemetry(id),
+	})
 }
 
 // ExecCommand 向节点下发指令并等待结果（需要 operator 以上权限）。
