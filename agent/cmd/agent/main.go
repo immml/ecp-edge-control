@@ -141,7 +141,7 @@ func cmdRun(args []string) {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	tr := transport.New(cfg, log)
+	tr := transport.New(cfg, log, c)
 	if err := tr.Run(ctx); err != nil && err != context.Canceled {
 		fmt.Fprintf(os.Stderr, "运行异常: %v\n", err)
 		os.Exit(1)

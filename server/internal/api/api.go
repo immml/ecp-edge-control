@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	ecpv1 "ecp.dev/ecp/proto/gen/ecp/v1"
 	"ecp.dev/ecp/server/internal/auth"
@@ -210,18 +211,15 @@ func (h *Handler) NodeTelemetry(c *gin.Context) {
 func (h *Handler) ExecCommand(c *gin.Context) {
 	id := c.Param("id")
 	var in struct {
-		Type   string         `json:"type"`
-		Params *ecpv1.Command `json:"params"`
+		Type       string           `json:"type"`
+		Params     *structpb.Struct `json:"params"`
+		TimeoutSec int32            `json:"timeout_sec"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil || in.Type == "" {
 		fail(c, http.StatusBadRequest, codeParam, "指令类型必填")
 		return
 	}
-	cmd := &ecpv1.Command{Type: commandType(in.Type)}
-	if in.Params != nil {
-		cmd.Params = in.Params.Params
-		cmd.TimeoutSec = in.Params.TimeoutSec
-	}
+	cmd := &ecpv1.Command{Type: commandType(in.Type), Params: in.Params, TimeoutSec: in.TimeoutSec}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 35*time.Second)
 	defer cancel()
 	res, err := h.dispatch.Dispatch(ctx, c.GetUint("uid"), c.GetString("username"), id, cmd)

@@ -20,22 +20,37 @@ import (
 	"google.golang.org/grpc/credentials"
 
 	ecpv1 "ecp.dev/ecp/proto/gen/ecp/v1"
+	"ecp.dev/ecp/agent/internal/alert"
 	"ecp.dev/ecp/agent/internal/caps"
+	"ecp.dev/ecp/agent/internal/collector"
 	"ecp.dev/ecp/agent/internal/config"
+	"ecp.dev/ecp/agent/internal/cache"
 	"ecp.dev/ecp/agent/internal/executor"
 	"ecp.dev/ecp/agent/internal/register"
 )
 
 // Transport 管理 Agent 到控制面的连接。
 type Transport struct {
-	cfg  *config.Config
-	log  *slog.Logger
-	exec *executor.Executor
+	cfg        *config.Config
+	log        *slog.Logger
+	exec       *executor.Executor
+	cache      *cache.Cache
+	alertEngine *alert.Engine
+	coll       *collector.Collector
 }
 
-// New 构造传输管理器。
-func New(cfg *config.Config, log *slog.Logger) *Transport {
-	return &Transport{cfg: cfg, log: log, exec: executor.New(cfg)}
+// New 构造传输管理器。cache 用于本地遥测落库与告警记录；
+// 构造时探测能力并实例化管理器/采集器/告警引擎。
+func New(cfg *config.Config, log *slog.Logger, ch *cache.Cache) *Transport {
+	c := caps.Probe()
+	return &Transport{
+		cfg:        cfg,
+		log:        log,
+		exec:       executor.New(cfg),
+		cache:      ch,
+		alertEngine: alert.New(cfg, ch, log),
+		coll:       collector.New(c),
+	}
 }
 
 // Run 是 Agent 常驻主循环。阻塞直至 ctx 取消。会自动注册、建流、重连。
@@ -136,7 +151,7 @@ func (t *Transport) streamLoop(ctx context.Context, conn *grpc.ClientConn, id *r
 	first := &ecpv1.AgentMessage{
 		NodeId: id.NodeID,
 		Payload: &ecpv1.AgentMessage_Heartbeat{
-			Heartbeat: t.newHeartbeat(),
+			Heartbeat: t.collectAndBuildHeartbeat(),
 		},
 	}
 	if err := stream.Send(first); err != nil {
@@ -149,6 +164,29 @@ func (t *Transport) streamLoop(ctx context.Context, conn *grpc.ClientConn, id *r
 		Payload: &ecpv1.AgentMessage_Capabilities{Capabilities: capsToProto(s)},
 	})
 
+	// 单一常驻接收协程：只在这里调用 stream.Recv()，避免并发 Recv 破坏流。
+	// 指令回执由该协程内的 handleCommand 通过同一流 Send，Send 与 Recv 分属不同方向，合规。
+	recvErr := make(chan error, 1)
+	go func() {
+	for {
+		msg, err := stream.Recv()
+		if err != nil {
+				recvErr <- err
+				return
+			}
+			if cmd := msg.GetCommand(); cmd != nil {
+				go t.handleCommand(stream, id, cmd)
+			}
+			if sync := msg.GetAlertRules(); sync != nil {
+				if err := t.alertEngine.ApplyRules(sync.GetRulesYaml()); err != nil {
+					t.log.Warn("规则同步失败", "err", err)
+				} else {
+					t.log.Info("已应用控制面下发的告警规则", "version", sync.GetVersion())
+				}
+			}
+		}
+	}()
+
 	// 心跳定时器
 	ticker := time.NewTicker(t.cfg.Telemetry.Interval)
 	defer ticker.Stop()
@@ -157,39 +195,14 @@ func (t *Transport) streamLoop(ctx context.Context, conn *grpc.ClientConn, id *r
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case err := <-recvErr:
+			return err
 		case <-ticker.C:
-			if err := stream.Send(&ecpv1.AgentMessage{
-				NodeId:  id.NodeID,
-				Payload: &ecpv1.AgentMessage_Heartbeat{Heartbeat: t.newHeartbeat()},
-			}); err != nil {
+			if err := t.sendHeartbeat(stream, id.NodeID); err != nil {
+				t.alertEngine.RecordHeartbeat(false)
 				return err
 			}
-		default:
-			// 非阻塞读取服务端下发（本桩不请求指令，仅心跳）
-		}
-
-		// 尝试接收下行消息（带超时，避免永久阻塞）
-		recvCh := make(chan struct {
-			msg *ecpv1.ControlMessage
-			err error
-		}, 1)
-		go func() {
-			msg, err := stream.Recv()
-			recvCh <- struct {
-				msg *ecpv1.ControlMessage
-				err error
-			}{msg, err}
-		}()
-		select {
-		case r := <-recvCh:
-			if r.err != nil {
-				return r.err
-			}
-			if cmd := r.msg.GetCommand(); cmd != nil {
-				go t.handleCommand(stream, id, cmd)
-			}
-		case <-time.After(200 * time.Millisecond):
-			// 心跳周期内无事发生，继续
+			t.alertEngine.RecordHeartbeat(true)
 		}
 	}
 }
@@ -250,13 +263,42 @@ func (t *Transport) nodeInfo(host string) *ecpv1.NodeInfo {
 	}
 }
 
-func (t *Transport) newHeartbeat() *ecpv1.Heartbeat {
+// collectAndBuildHeartbeat 采集一次遥测并构造心跳帧。
+func (t *Transport) collectAndBuildHeartbeat() *ecpv1.Heartbeat {
+	tele := t.coll.Collect()
+	// 本地落缓存：控制面离线期间也能追溯历史（UploadBacklog 补传）
+	if t.cache != nil && tele != nil {
+		_ = t.cache.AppendSample(&cache.Sample{
+			Ts:                 time.Now(),
+			CPUPercent:         tele.GetCpuPercent(),
+			MemTotalBytes:      tele.GetMemTotalBytes(),
+			MemUsedBytes:       tele.GetMemUsedBytes(),
+			DiskTotalBytes:     tele.GetDiskTotalBytes(),
+			DiskUsedBytes:      tele.GetDiskUsedBytes(),
+			NetRxBytes:         tele.GetNetRxBytes(),
+			NetTxBytes:         tele.GetNetTxBytes(),
+			Load1:              tele.GetLoad1(),
+			TemperatureCelsius: tele.GetTemperatureCelsius(),
+			ContainersRunning:  tele.GetContainerRunning(),
+		})
+		// 本地阈值评估（控制面不在线也能告警）
+		t.alertEngine.Evaluate(tele)
+	}
 	return &ecpv1.Heartbeat{
-		NodeId:        "",
-		AgentVersion:  "0.1.0",
-		UptimeSec:     0,
+		NodeId:           "",
+		Telemetry:        tele,
+		AgentVersion:     "0.1.0",
 		ControlPlaneSeen: true,
 	}
+}
+
+// sendHeartbeat 发送一次带实时遥测的心跳。
+func (t *Transport) sendHeartbeat(stream ecpv1.AgentService_CommandStreamClient, nodeID string) error {
+	hb := t.collectAndBuildHeartbeat()
+	return stream.Send(&ecpv1.AgentMessage{
+		NodeId:  nodeID,
+		Payload: &ecpv1.AgentMessage_Heartbeat{Heartbeat: hb},
+	})
 }
 
 func (t *Transport) sleep(d time.Duration) {

@@ -137,6 +137,10 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("解析配置失败: %w", err)
 	}
+	// 环境变量覆盖：飞书 Webhook 属于凭据，优先走 env，避免写进配置文件/仓库。
+	if v := os.Getenv("ECP_FEISHU_WEBHOOK"); v != "" {
+		cfg.Alert.FeishuWebhook = v
+	}
 	return cfg, nil
 }
 

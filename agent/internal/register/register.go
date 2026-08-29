@@ -47,6 +47,13 @@ func LoadOrCreate(cfg *config.Config) (*Identity, error) {
 	if cfg.ControlPlane.ClientCert != "" {
 		if b, err := os.ReadFile(cfg.ControlPlane.ClientCert); err == nil {
 			id.CertPEM = b
+			// 从证书 CN 回填 node_id：服务端签发时强制把 CN 设为 node_id，
+			// 这样重启后即便不在内存里也能自愈身份，避免 node_id mismatch。
+			if cb, _ := pem.Decode(b); cb != nil {
+				if crt, err2 := x509.ParseCertificate(cb.Bytes); err2 == nil {
+					id.NodeID = crt.Subject.CommonName
+				}
+			}
 		}
 	}
 	// 加载或生成私钥

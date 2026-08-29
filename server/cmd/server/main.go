@@ -6,7 +6,10 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"os"
@@ -71,6 +74,30 @@ func main() {
 		os.Exit(1)
 	}
 	defer st.Close()
+
+	if len(os.Args) > 1 && os.Args[1] == "keygen" {
+		// 生成一份节点注册 Key：明文打印供 agent 配置，仅入库哈希。
+		buf := make([]byte, 24)
+		if _, err := rand.Read(buf); err != nil {
+			fmt.Fprintf(os.Stderr, "生成随机 Key 失败: %v\n", err)
+			os.Exit(1)
+		}
+		plain := hex.EncodeToString(buf)
+		sum := sha256.Sum256([]byte(plain))
+		keyHash := hex.EncodeToString(sum[:])
+		label := "orangepi-deploy"
+		if len(os.Args) > 2 && os.Args[2] != "" {
+			label = os.Args[2]
+		}
+		if err := st.CreateKey(&model.RegistrationKey{KeyHash: keyHash, Label: label}); err != nil {
+			fmt.Fprintf(os.Stderr, "创建注册 Key 失败: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("REGISTRATION_KEY=%s\n", plain)
+		fmt.Printf("KEY_HASH=%s\n", keyHash)
+		fmt.Printf("提示：把 REGISTRATION_KEY 写入 agent 的 registration.key（或 registration.key_file）\n")
+		return
+	}
 
 	// 首次启动：创建超管账户（口令仅显示一次）
 	if err := bootstrapAdmin(st, log); err != nil {
