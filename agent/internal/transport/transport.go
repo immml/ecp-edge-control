@@ -35,7 +35,7 @@ type Transport struct {
 
 // New 构造传输管理器。
 func New(cfg *config.Config, log *slog.Logger) *Transport {
-	return &Transport{cfg: cfg, log: log, exec: executor.New()}
+	return &Transport{cfg: cfg, log: log, exec: executor.New(cfg)}
 }
 
 // Run 是 Agent 常驻主循环。阻塞直至 ctx 取消。会自动注册、建流、重连。
@@ -169,21 +169,39 @@ func (t *Transport) streamLoop(ctx context.Context, conn *grpc.ClientConn, id *r
 		}
 
 		// 尝试接收下行消息（带超时，避免永久阻塞）
-		recvCh := make(chan error, 1)
+		recvCh := make(chan struct {
+			msg *ecpv1.ControlMessage
+			err error
+		}, 1)
 		go func() {
-			_, err := stream.Recv()
-			recvCh <- err
+			msg, err := stream.Recv()
+			recvCh <- struct {
+				msg *ecpv1.ControlMessage
+				err error
+			}{msg, err}
 		}()
 		select {
-		case err := <-recvCh:
-			if err != nil {
-				return err
+		case r := <-recvCh:
+			if r.err != nil {
+				return r.err
 			}
-			// 收到下行（T3 接入指令分发），本期忽略
+			if cmd := r.msg.GetCommand(); cmd != nil {
+				go t.handleCommand(stream, id, cmd)
+			}
 		case <-time.After(200 * time.Millisecond):
 			// 心跳周期内无事发生，继续
 		}
 	}
+}
+
+// handleCommand 执行控制面下发的指令并通过同一流回传结果。
+func (t *Transport) handleCommand(stream ecpv1.AgentService_CommandStreamClient, id *register.Identity, cmd *ecpv1.Command) {
+	res := t.exec.Handle(cmd)
+	res.TraceId = cmd.TraceId
+	_ = stream.Send(&ecpv1.AgentMessage{
+		NodeId:  id.NodeID,
+		Payload: &ecpv1.AgentMessage_Result{Result: res},
+	})
 }
 
 // register 调用 Register RPC 完成首次签发并落盘证书。
