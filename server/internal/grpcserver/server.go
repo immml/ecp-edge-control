@@ -12,6 +12,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -217,6 +218,11 @@ func (s *Server) handleAgentMessage(sess *session.Session, msg *ecpv1.AgentMessa
 				s.log.Warn("遥测落库失败", "node_id", msg.NodeId, "err", err)
 			}
 		}
+		if v := p.Heartbeat.AgentVersion; v != "" {
+			if err := s.store.UpdateAgentVersion(msg.NodeId, v); err != nil {
+				s.log.Warn("Agent 版本落库失败", "node_id", msg.NodeId, "err", err)
+			}
+		}
 		ack := &ecpv1.ControlMessage{
 			TraceId: msg.NodeId,
 			Payload: &ecpv1.ControlMessage_HeartbeatAck{
@@ -232,6 +238,11 @@ func (s *Server) handleAgentMessage(sess *session.Session, msg *ecpv1.AgentMessa
 		s.sessions.DeliverResult(p.Result.TraceId, p.Result)
 	case *ecpv1.AgentMessage_Capabilities:
 		s.log.Info("收到能力上报", "node_id", msg.NodeId)
+		if data, err := json.Marshal(p.Capabilities); err == nil {
+			if err := s.store.UpdateCapabilities(msg.NodeId, string(data)); err != nil {
+				s.log.Warn("能力落库失败", "node_id", msg.NodeId, "err", err)
+			}
+		}
 	case *ecpv1.AgentMessage_Event:
 		s.log.Info("收到节点事件", "node_id", msg.NodeId, "kind", p.Event.Kind)
 	}

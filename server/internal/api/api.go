@@ -6,6 +6,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -158,27 +159,87 @@ func (h *Handler) ListNodes(c *gin.Context) {
 		return
 	}
 	out := make([]gin.H, 0, len(nodes))
-	for _, n := range nodes {
-		online := h.sessions.IsOnline(n.ID)
-		t := h.sessions.LatestTelemetry(n.ID)
-		row := gin.H{
-			"id":           n.ID,
-			"hostname":     n.Hostname,
-			"arch":         n.Arch,
-			"os":           n.OS,
-			"agent_version": n.AgentVersion,
-			"status":       statusOf(online),
-			"last_seen_at": n.LastSeenAt,
-		}
-		if t != nil {
-			row["cpu_percent"] = t.CpuPercent
-			row["mem_used_bytes"] = t.MemUsedBytes
-			row["mem_total_bytes"] = t.MemTotalBytes
-			row["containers_running"] = t.ContainerRunning
-		}
-		out = append(out, row)
+	for i := range nodes {
+		out = append(out, nodeView(h, &nodes[i]))
 	}
 	ok(c, gin.H{"total": len(out), "nodes": out})
+}
+
+// nodeView 把 DB node + session 遥测 + DB 中持久化的 Capabilities 拼成前端 Node 形状。
+func nodeView(h *Handler, n *model.Node) gin.H {
+	row := gin.H{
+		"id":            n.ID,
+		"hostname":      n.Hostname,
+		"arch":          n.Arch,
+		"os":            n.OS,
+		"os_version":    n.OSVersion,
+		"kernel":        n.Kernel,
+		"agent_version": n.AgentVersion,
+		"tailscale_ip":  n.TailscaleIP,
+		"status":        statusOf(h.sessions.IsOnline(n.ID)),
+		"last_seen_at":  n.LastSeenAt,
+		"registered_at": n.RegisteredAt,
+		"capabilities":  decodeCapabilities(n.CapabilitiesJSON),
+		"telemetry":     telemetryView(h.sessions.LatestTelemetry(n.ID)),
+	}
+	return row
+}
+
+// telemetryView 把 ecpv1.Telemetry 映射成前端驼峰字段；离线（nil）返回零值。
+func telemetryView(t *ecpv1.Telemetry) gin.H {
+	if t == nil {
+		return gin.H{
+			"cpuPercent": 0, "memUsedBytes": 0, "memTotalBytes": 0,
+			"diskUsedBytes": 0, "diskTotalBytes": 0,
+			"netRxBytes": 0, "netTxBytes": 0, "load1": 0,
+			"temperatureCelsius": 0, "containersRunning": 0,
+		}
+	}
+	return gin.H{
+		"cpuPercent":         t.CpuPercent,
+		"memUsedBytes":       t.MemUsedBytes,
+		"memTotalBytes":      t.MemTotalBytes,
+		"diskUsedBytes":      t.DiskUsedBytes,
+		"diskTotalBytes":     t.DiskTotalBytes,
+		"netRxBytes":         t.NetRxBytes,
+		"netTxBytes":         t.NetTxBytes,
+		"load1":              t.Load1,
+		"temperatureCelsius": t.TemperatureCelsius,
+		"containersRunning":  t.ContainerRunning,
+	}
+}
+
+// decodeCapabilities 把 DB 持久化的 capabilities JSON 字符串解出来；
+// 空字符串返回空对象（前端拿到 null 会展示不全）。
+func decodeCapabilities(s string) gin.H {
+	empty := gin.H{
+		"canReadSystemStats": false, "canTerminal": false, "canManageFiles": false,
+		"canReadDocker": false, "canWriteDocker": false, "canManageTailscale": false,
+		"canManageNetwork": false, "canManageSystemd": false, "canSelfUpgrade": false,
+		"canReadNetConfig": false, "runAsUid": 0, "runAsUser": "", "missingTools": []any{},
+	}
+	if s == "" {
+		return empty
+	}
+	var c ecpv1.CapabilityReport
+	if err := json.Unmarshal([]byte(s), &c); err != nil {
+		return empty
+	}
+	return gin.H{
+		"canReadSystemStats": c.CanReadSystemStats,
+		"canTerminal":        c.CanTerminal,
+		"canManageFiles":     c.CanManageFiles,
+		"canReadDocker":      c.CanReadDocker,
+		"canWriteDocker":     c.CanWriteDocker,
+		"canManageTailscale": c.CanManageTailscale,
+		"canManageNetwork":   c.CanManageNetwork,
+		"canManageSystemd":   c.CanManageSystemd,
+		"CanSelfUpgrade":     c.CanSelfUpgrade,
+		"canReadNetConfig":   c.CanReadNetConfig,
+		"runAsUid":           c.RunAsUid,
+		"runAsUser":          c.RunAsUser,
+		"missingTools":       c.MissingTools,
+	}
 }
 
 // GetNode 返回单节点详情。
@@ -189,11 +250,10 @@ func (h *Handler) GetNode(c *gin.Context) {
 		fail(c, http.StatusNotFound, codeNotFound, "节点不存在")
 		return
 	}
-	telemetry := h.sessions.LatestTelemetry(id)
 	ok(c, gin.H{
-		"node":          n,
-		"online":        h.sessions.IsOnline(id),
-		"telemetry":     telemetry,
+		"node":    n,
+		"online":  h.sessions.IsOnline(id),
+		"view":    nodeView(h, n),
 	})
 }
 

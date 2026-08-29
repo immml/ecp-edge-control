@@ -7,69 +7,22 @@ import { ElMessage } from 'element-plus'
 import { api, type ApiNode } from '@/api/client'
 import { mockNodes } from '@/mock/nodes'
 import { formatBytes, percent, timeAgo } from '@/utils/format'
-import type { Node } from '@/api/types'
 
 const router = useRouter()
-const nodes = ref<Node[]>([])
+const nodes = ref<ApiNode[]>([])
 const loading = ref(false)
 const usingMock = ref(false)
 
-// 能力摘要：把能力压成几个关键 chip，避免卡片被标签淹没
-function capabilityChips(node: Node) {
-  const c = node.capabilities
-  return [
-    { label: '容器', ok: c.canReadDocker, warn: false },
-    { label: 'Tailscale', ok: c.canManageTailscale, warn: false },
-    { label: '终端', ok: c.canTerminal, warn: false },
-    { label: '网络控制', ok: c.canManageNetwork, warn: !c.canManageNetwork },
-  ]
-}
-
 const onlineCount = computed(() => nodes.value.filter((n) => n.status === 'online').length)
 
-function mapRow(n: ApiNode): Node {
-  return {
-    id: n.id,
-    hostname: n.hostname,
-    arch: n.arch,
-    os: n.os,
-    osVersion: '',
-    kernel: '',
-    agentVersion: n.agent_version,
-    tailscaleIp: '',
-    status: (n.status as Node['status']) || 'unknown',
-    capabilities: {
-      canReadSystemStats: false,
-      canTerminal: false,
-      canManageFiles: false,
-      canReadDocker: false,
-      canWriteDocker: false,
-      canManageTailscale: false,
-      canManageNetwork: false,
-      canManageSystemd: false,
-      canSelfUpgrade: false,
-      canReadNetConfig: false,
-      runAsUid: 0,
-      runAsUser: '',
-      missingTools: [],
-    },
-    telemetry: {
-      cpuPercent: n.cpu_percent ?? 0,
-      memTotalBytes: n.mem_total_bytes ?? 0,
-      memUsedBytes: n.mem_used_bytes ?? 0,
-      diskTotalBytes: 0,
-      diskUsedBytes: 0,
-      netRxBytes: 0,
-      netTxBytes: 0,
-      load1: 0,
-      load5: 0,
-      temperatureCelsius: 0,
-      containerRunning: n.containers_running ?? 0,
-      containerTotal: 0,
-    },
-    registeredAt: '',
-    lastSeenAt: n.last_seen_at || '',
-  }
+function capabilityChips(n: ApiNode) {
+  const c = n.capabilities ?? ({} as any)
+  return [
+    { label: '容器', ok: !!c.canReadDocker, warn: false },
+    { label: 'Tailscale', ok: !!c.canManageTailscale, warn: false },
+    { label: '终端', ok: !!c.canTerminal, warn: false },
+    { label: '网络控制', ok: !!c.canManageNetwork, warn: !c.canManageNetwork },
+  ]
 }
 
 async function load() {
@@ -77,11 +30,10 @@ async function load() {
   try {
     const rows = await api.listNodes()
     usingMock.value = false
-    nodes.value = rows.map(mapRow)
-  } catch (e) {
-    // 后端未启动或离线：回退 mock，保证页面可用
+    nodes.value = rows
+  } catch (e: any) {
     usingMock.value = true
-    nodes.value = mockNodes
+    nodes.value = mockNodes as unknown as ApiNode[]
     ElMessage.warning('后端未连接，已展示示例数据')
   } finally {
     loading.value = false
@@ -113,12 +65,12 @@ onMounted(load)
           </span>
         </div>
 
-        <div class="node-ip mono">{{ node.tailscaleIp || '—' }}</div>
+        <div class="node-ip mono">{{ node.tailscale_ip || '—' }}</div>
 
         <div class="node-meta">
-          <span class="chip">{{ node.arch }}</span>
-          <span class="chip">{{ node.osVersion || node.os }}</span>
-          <span class="chip">Agent {{ node.agentVersion }}</span>
+          <span class="chip">{{ node.arch || '—' }}</span>
+          <span class="chip">{{ node.os_version || node.os || '—' }}</span>
+          <span class="chip">Agent {{ node.agent_version || '—' }}</span>
         </div>
 
         <div v-if="node.status === 'online'">
@@ -173,7 +125,7 @@ onMounted(load)
         </div>
 
         <div v-else class="text-secondary" style="font-size: 12.5px; padding: 8px 0">
-          <div>最后在线：{{ timeAgo(node.lastSeenAt) }}</div>
+          <div>最后在线：{{ timeAgo(node.last_seen_at) }}</div>
           <div style="display: flex; align-items: center; gap: 4px; margin-top: 6px">
             <el-icon><Timer /></el-icon>
             节点自治运行中，控制面上线后自动补传数据

@@ -7,18 +7,49 @@
 
 const TOKEN_KEY = 'ecp_token'
 
+export interface Capabilities {
+  canReadSystemStats: boolean
+  canTerminal: boolean
+  canManageFiles: boolean
+  canReadDocker: boolean
+  canWriteDocker: boolean
+  canManageTailscale: boolean
+  canManageNetwork: boolean
+  canManageSystemd: boolean
+  canSelfUpgrade: boolean
+  canReadNetConfig: boolean
+  runAsUid: number
+  runAsUser: string
+  missingTools: string[]
+}
+
+export interface Telemetry {
+  cpuPercent: number
+  memUsedBytes: number
+  memTotalBytes: number
+  diskUsedBytes: number
+  diskTotalBytes: number
+  netRxBytes: number
+  netTxBytes: number
+  load1: number
+  temperatureCelsius: number
+  containersRunning: number
+}
+
 export interface ApiNode {
   id: string
   hostname: string
   arch: string
   os: string
+  os_version?: string
+  kernel?: string
   agent_version: string
-  status: string
+  tailscale_ip?: string
+  status: 'online' | 'offline' | 'unknown'
   last_seen_at: string
-  cpu_percent?: number
-  mem_used_bytes?: number
-  mem_total_bytes?: number
-  containers_running?: number
+  registered_at?: string
+  capabilities: Capabilities
+  telemetry: Telemetry
 }
 
 export interface LoginResult {

@@ -128,6 +128,21 @@ func (s *Store) UpdateNodeStatus(id, status string, caps string) error {
 		}).Error
 }
 
+// UpdateAgentVersion 更新 Agent 版本号。
+func (s *Store) UpdateAgentVersion(id, version string) error {
+	if version == "" {
+		return nil
+	}
+	return s.db.Model(&model.Node{}).Where("id = ?", id).
+		UpdateColumn("agent_version", version).Error
+}
+
+// UpdateCapabilities 仅更新能力 JSON。
+func (s *Store) UpdateCapabilities(id, caps string) error {
+	return s.db.Model(&model.Node{}).Where("id = ?", id).
+		UpdateColumn("capabilities", caps).Error
+}
+
 // ============================================================
 // 注册 Key 与指纹（"上线即控"的核心）
 // ============================================================
