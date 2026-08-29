@@ -58,7 +58,9 @@
 | **#8** | `203cfa1` | `feat(agent): 实现 Agent 真实执行器（Shell + Docker，能力分级）` | T4-A 执行器 | executor 改写：SHELL 真实执行 + 提权降级；Docker list/action/logs 能力门控 + 标签隔离；单元测试通过 |
 | **#9** | `e00fdcf` | `feat(agent,server): 指标采集 + 告警引擎 + 飞书推送（B+C）` | T4-B/C | collector(gopsutil) + alert(阈值/离线规则 + 飞书机器人) + server 遥测落 SQLite；Webhook 走 env ECP_FEISHU_WEBHOOK |
 | **#10** | `de45c48` | `fix(agent,server): 真机联调 D 修复——流接收/身份持久化/指令参数/keygen` | T4-D 联调修复 | 并发 Recv 破坏流 / NodeID 重启丢失(node_id mismatch) / 指令参数结构 / server keygen 子命令；补 B+C 遗漏文件 |
-| — | 待提交 | 测试通过 | Orange Pi 真机端到端验证（指令回执 live 复测待 Pi 网络恢复） |
+| **#10b** | `9473d1e` | `fix(agent): 告警规则文件兼容 rules 包裹格式` | T4 告警验证 | 真机验证发现 LoadRules 只认顶层列表，{rules:[...]} 格式解析失败且错误被忽略→引擎静默失效；新增 parseRules 双格式兼容 |
+| **#11** | `7df92d0` | `feat(web,server): 节点详情页遥测可视化 + 历史接口 + 修复内嵌前端路径` | T5 可视化 | NodeDetailView 接通真实 API（SVG 趋势图/15s 刷新/离线回退）；/telemetry 支持 ?limit= 历史序列；修复 spa 改名后 NoRoute 读 dist 的遗留 bug |
+| **已验** | 全链路 | 注册→心跳→遥测→指令下发→真机执行→回执 + 告警触发→飞书 + systemd 自启 | 真机验收 | Orange Pi 实测通过（详见 docs/overview-d.md） |
 
 回滚方式：`git revert <commit>` 或 `git reset --hard <编号对应 commit hash>`
 
