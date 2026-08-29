@@ -74,12 +74,16 @@ function timeLabel(i: number): string {
   return new Date(t.ts).toLocaleTimeString('zh-CN', { hour12: false })
 }
 
-// 远程打开节点 1Panel：走控制面内置流量转发，自动带安全入口
+// 远程打开节点 1Panel：直连 Tailscale IP（跨网可达），自动带安全入口
 function openPanel() {
+  const ip = node.value?.tailscale_ip
+  if (!ip) {
+    ElMessage.warning('该节点没有可用的 Tailscale IP，无法远程打开 1Panel')
+    return
+  }
   const entrance = node.value?.capabilities?.panelEntrance || ''
-  const base = `/api/v1/nodes/${nodeId}/panel`
-  const url = entrance ? `${base}${entrance.startsWith('/') ? entrance : '/' + entrance}` : `${base}/`
-  window.open(url, '_blank', 'noopener')
+  const path = entrance ? (entrance.startsWith('/') ? entrance : '/' + entrance) : ''
+  window.open(`http://${ip}:31252${path}`, '_blank', 'noopener')
 }
 </script>
 
