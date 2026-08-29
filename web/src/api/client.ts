@@ -7,6 +7,15 @@
 
 const TOKEN_KEY = 'ecp_token'
 
+export interface RemoteFile {
+  name: string
+  path: string
+  is_dir: boolean
+  size: number
+  mode: string
+  modified_at: string
+}
+
 export interface Capabilities {
   canReadSystemStats: boolean
   canTerminal: boolean
@@ -145,6 +154,10 @@ class ApiClient {
 
   async getTelemetry(nodeId: string, limit = 120): Promise<TelemetryResult> {
     return this.request('GET', `api/v1/nodes/${nodeId}/telemetry?limit=${limit}`)
+  }
+
+  async listFiles(nodeId: string, path: string): Promise<{ path: string; items: RemoteFile[] }> {
+    return this.request('GET', `api/v1/nodes/${nodeId}/files?path=${encodeURIComponent(path)}`)
   }
 
   async audit(nodeId?: string): Promise<{ logs: any[]; total: number }> {

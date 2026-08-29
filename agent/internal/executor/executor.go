@@ -51,6 +51,8 @@ func (e *Executor) Handle(cmd *ecpv1.Command) *ecpv1.CommandResult {
 			return e.dockerAction(cmd)
 		case ecpv1.CommandType_COMMAND_TYPE_DOCKER_LOGS:
 			return e.dockerLogs(cmd)
+		case ecpv1.CommandType_COMMAND_TYPE_FILE_LIST:
+			return e.fileList(cmd)
 		default:
 			return e.fail(cmd, "不支持的指令类型: "+cmd.GetType().String())
 		}

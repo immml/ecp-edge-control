@@ -70,6 +70,7 @@ func New(st *store.Store, sessions *session.Manager, dispatch *command.Dispatche
 		api.GET("/nodes", h.ListNodes)
 		api.GET("/nodes/:id", h.GetNode)
 		api.GET("/nodes/:id/telemetry", h.NodeTelemetry)
+		api.GET("/nodes/:id/files", h.RequireRole(model.RoleViewer), h.ListFiles)
 		api.GET("/audit", h.ListAudit)
 		api.POST("/nodes/:id/command", h.RequireRole(model.RoleOperator), h.ExecCommand)
 	}
@@ -302,6 +303,42 @@ func (h *Handler) ExecCommand(c *gin.Context) {
 		return
 	}
 	ok(c, res)
+}
+
+// ListFiles 列出节点目录内容（?path= 指定目录，默认 /）。
+func (h *Handler) ListFiles(c *gin.Context) {
+	id := c.Param("id")
+	path := c.Query("path")
+	if path == "" {
+		path = "/"
+	}
+	params, err := structpb.NewStruct(map[string]any{"path": path})
+	if err != nil {
+		fail(c, http.StatusInternalServerError, codeInternal, "构造参数失败")
+		return
+	}
+	cmd := &ecpv1.Command{Type: ecpv1.CommandType_COMMAND_TYPE_FILE_LIST, Params: params}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 25*time.Second)
+	defer cancel()
+	res, err := h.dispatch.Dispatch(ctx, c.GetUint("uid"), c.GetString("username"), id, cmd)
+	if err != nil {
+		if err.Error() == "节点离线，无法下发指令" {
+			fail(c, http.StatusServiceUnavailable, codeOffline, "节点离线")
+			return
+		}
+		fail(c, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	if res.GetStatus() != ecpv1.ResultStatus_RESULT_STATUS_OK {
+		fail(c, http.StatusInternalServerError, codeInternal, res.GetMessage())
+		return
+	}
+	var items []gin.H
+	if err := json.Unmarshal(res.GetStdout(), &items); err != nil {
+		fail(c, http.StatusInternalServerError, codeInternal, "解析文件列表失败")
+		return
+	}
+	ok(c, gin.H{"path": path, "items": items})
 }
 
 // ListAudit 查询审计日志。
