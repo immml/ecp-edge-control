@@ -1,12 +1,8 @@
-// Package api 的 VNC WebSocket 桥接（GET /api/v1/nodes/:id/vnc/ws）。
-//
-// 状态：UI 入口已撤回（边缘节点为无头后端，不需要 VNC 远程桌面）。
-// handler/路由暂保留在 server 中（不删除），将来需要时接入前端 VncView.vue
-// 即可启用，不影响其他功能。
 package api
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"strconv"

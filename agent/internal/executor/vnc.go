@@ -1,8 +1,3 @@
-// Package executor 包含 VNC 远程桌面命令（VNC_STATUS/START/STOP）的实现。
-//
-// 状态：UI 入口已撤回（边缘节点为无头后端，不需要 VNC 远程桌面）。
-// agent/server 端命令实现保留作为底座（PROTO_COMMAND_TYPE_VNC_*），
-// 将来若需要远程桌面/调测时只需重新接入 Web UI（VncView.vue + noVNC）。
 package executor
 
 import (
