@@ -452,6 +452,9 @@ func commandType(s string) ecpv1.CommandType {
 		ecpv1.CommandType_COMMAND_TYPE_AGENT_UPGRADE,
 		ecpv1.CommandType_COMMAND_TYPE_ALERT_RULE_SYNC,
 		ecpv1.CommandType_COMMAND_TYPE_LOG_QUERY,
+		ecpv1.CommandType_COMMAND_TYPE_FRP_STATUS,
+		ecpv1.CommandType_COMMAND_TYPE_FRP_UP,
+		ecpv1.CommandType_COMMAND_TYPE_FRP_DOWN,
 	} {
 		if strings.TrimPrefix(t.String(), "COMMAND_TYPE_") == norm {
 			return t
