@@ -455,6 +455,8 @@ func commandType(s string) ecpv1.CommandType {
 		ecpv1.CommandType_COMMAND_TYPE_FRP_STATUS,
 		ecpv1.CommandType_COMMAND_TYPE_FRP_UP,
 		ecpv1.CommandType_COMMAND_TYPE_FRP_DOWN,
+		ecpv1.CommandType_COMMAND_TYPE_FRP_CONFIG_GET,
+		ecpv1.CommandType_COMMAND_TYPE_FRP_CONFIG_SET,
 	} {
 		if strings.TrimPrefix(t.String(), "COMMAND_TYPE_") == norm {
 			return t

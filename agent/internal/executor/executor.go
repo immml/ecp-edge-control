@@ -65,6 +65,10 @@ func (e *Executor) Handle(cmd *ecpv1.Command) *ecpv1.CommandResult {
 			return e.frpUp(cmd)
 		case ecpv1.CommandType_COMMAND_TYPE_FRP_DOWN:
 			return e.frpDown(cmd)
+		case ecpv1.CommandType_COMMAND_TYPE_FRP_CONFIG_GET:
+			return e.frpConfigGet(cmd)
+		case ecpv1.CommandType_COMMAND_TYPE_FRP_CONFIG_SET:
+			return e.frpConfigSet(cmd)
 		default:
 			return e.fail(cmd, "不支持的指令类型: "+cmd.GetType().String())
 		}

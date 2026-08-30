@@ -122,6 +122,8 @@ enum CommandType {
   COMMAND_TYPE_FRP_STATUS = 20;           // 查询 frpc 状态（二进制/进程/配置）
   COMMAND_TYPE_FRP_UP = 21;               // 启动 frpc（需提权）
   COMMAND_TYPE_FRP_DOWN = 22;             // 停止 frpc（需提权）
+  COMMAND_TYPE_FRP_CONFIG_GET = 23;       // 读取 frpc 配置（frpc.ini / frpc.toml）
+  COMMAND_TYPE_FRP_CONFIG_SET = 24;       // 写入/修改 frpc 配置（需提权）
 }
 
 message Command {
