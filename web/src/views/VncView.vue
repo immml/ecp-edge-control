@@ -17,6 +17,7 @@ const connected = ref(false)
 const connecting = ref(false)
 const vncStatus = ref<any>(null)
 const statusLoading = ref(false)
+let vncPassword = ''
 
 // —— VNC server 状态 ——
 async function loadStatus() {
@@ -34,18 +35,25 @@ async function loadStatus() {
 async function startVnc() {
   // 询问用户设置 VNC 密码（连接远程桌面时使用）
   const res = await ElMessageBox.prompt(
-    '设置 VNC 访问密码，连接远程桌面时需输入此密码。',
+    '设置 VNC 访问密码，连接远程桌面时需输入此密码（VNC 协议限制最长 8 位）。',
     '设置 VNC 密码',
     {
       inputType: 'password',
-      inputPlaceholder: '输入密码（至少 4 位）',
-      inputValidator: (v: string) => (v && v.trim().length >= 4 ? true : '密码至少 4 位'),
+      inputPlaceholder: '输入密码（4-8 位）',
+      inputValidator: (v: string) => (v && v.trim().length >= 4 && v.trim().length <= 8 ? true : '密码 4-8 位'),
       confirmButtonText: '设置并启动',
     },
   ).catch(() => null)
   if (!res?.value) return
-  const password = res.value as string
-  const r = await api.execCommand(nodeId, 'vnc_start', { password })
+  vncPassword = res.value as string
+  await doVncStart(vncPassword, '')
+}
+
+// doVncStart 执行 vnc_start；sudoPwd 为空则自动弹框询问（自动配置模式）
+async function doVncStart(password: string, sudoPwd: string) {
+  const params: Record<string, unknown> = { password }
+  if (sudoPwd) params.sudo_password = sudoPwd
+  const r = await api.execCommand(nodeId, 'vnc_start', params)
   await handleVncResult(r, '启动 VNC')
   await loadStatus()
   if (vncStatus.value?.running) connect()
@@ -60,29 +68,44 @@ async function stopVnc() {
 
 async function handleVncResult(r: CommandResult, label: string) {
   if (r.status === ResultStatus.NEEDS_PRIVILEGE) {
+    // 优先自动配置：询问节点 sudo 密码（仅本次授权使用，不保存）
+    const pwdRes = await ElMessageBox.prompt(
+      '需要节点 sudo 权限完成自动配置（免密 sudo + 设密码 + 启动）。请输入节点 sudo 密码——仅本次授权使用，不保存。',
+      '输入 sudo 密码（自动配置）',
+      {
+        inputType: 'password',
+        inputPlaceholder: '节点 sudo 密码',
+        confirmButtonText: '自动配置并启动',
+      },
+    ).catch(() => null)
+
+    if (pwdRes?.value) {
+      const sudoPwd = pwdRes.value as string
+      const r2 = await api.execCommand(nodeId, 'vnc_start', { password: vncPassword, sudo_password: sudoPwd })
+      if (r2.status === ResultStatus.OK) {
+        ElMessage.success('VNC 已启动（自动配置完成，之后全自动）')
+        await loadStatus()
+        if (vncStatus.value?.running) connect()
+        return
+      }
+      if (r2.status === ResultStatus.FAILED) {
+        ElMessage.error(`自动配置失败：${r2.message || 'sudo 密码可能不正确'}`)
+        return
+      }
+      // 仍需要提权（异常）：落入脚本兜底
+    }
+
+    // 兜底：显示手动脚本（用户可在节点上 sudo 执行）
     const script = r.privilege_script || ''
-    const hint = r.privilege_hint || '需要 root 权限（平台不自行提权）'
-    const res = await ElMessageBoxConfirm(
+    const hint = r.privilege_hint || '需要 root 权限'
+    await ElMessageBoxConfirm(
       `<div style="font-size:13px;line-height:1.7">
          <p style="margin:0 0 8px">${hint}</p>
          <pre style="background:var(--el-fill-color-light);padding:10px;border-radius:6px;overflow:auto;font-size:12px;white-space:pre-wrap">${script.replace(/</g, '&lt;')}</pre>
        </div>`,
       `${label}需要提权`,
     )
-    if (res) {
-      // 用户已执行脚本（可能已配置免密 sudo + 启动 VNC）：自动重试启动
-      await loadStatus()
-      if (!vncStatus.value?.running) {
-        const r2 = await api.execCommand(nodeId, 'vnc_start', {})
-        if (r2.status === ResultStatus.OK) {
-          ElMessage.success('VNC 已启动')
-        } else if (r2.status !== ResultStatus.NEEDS_PRIVILEGE) {
-          ElMessage.warning(`仍未成功：${r2.message || ''}`)
-        }
-      }
-      await loadStatus()
-      if (vncStatus.value?.running) connect()
-    }
+    await loadStatus()
   } else if (r.status === ResultStatus.OK) {
     ElMessage.success(`${label}成功`)
   } else {
@@ -108,7 +131,9 @@ async function ElMessageBoxConfirm(html: string, title: string): Promise<boolean
 function connect() {
   if (!container.value) return
   connecting.value = true
-  const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/v1/nodes/${nodeId}/vnc/ws?token=${encodeURIComponent(api.token || '')}`
+  // VNC 服务端可能监听在 5900/5901...（按 vnc_status 探测的实际端口）
+  const port = vncStatus.value?.port || 5900
+  const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/v1/nodes/${nodeId}/vnc/ws?token=${encodeURIComponent(api.token || '')}&port=${port}`
   rfb = new RFB(container.value, wsUrl, { credentials: { password: '' } })
   rfb.scaleViewport = true
   rfb.resizeSession = false

@@ -62,12 +62,14 @@ func (e *Executor) vncStatus(cmd *ecpv1.Command) *ecpv1.CommandResult {
 
 // vncStart 启动 VNC server（自动设密码 + 启动，一条链路）。
 //
-// 参数：geometry（可选，默认 1280x800）、password（可选，默认 orangepi）。
-// 实现：vncpasswd -f 写入密码（root 用户目录 /root/.vnc/passwd）后启动 vncserver。
-// 提权：节点有免密 sudo 则全自动；否则返回一次性授权脚本（自动配置 sudoers
-// NOPASSWD + 设密码 + 启动），用户 sudo 执行一次后平台全自动。
+// 参数：
+//   - geometry：分辨率（可选，默认 1280x800）
+//   - password：VNC 访问密码（前端询问用户输入）
+//   - sudo_password：节点 sudo 密码（可选，仅本次授权使用、不持久化；用于自动
+//     配置 sudoers 免密 sudo + 设密码 + 启动，之后平台全自动）
+// 实现：vncpasswd -f 写入密码（/root/.vnc/passwd）后启动 vncserver。
 func (e *Executor) vncStart(cmd *ecpv1.Command) *ecpv1.CommandResult {
-	timeout := dur(cmd.GetTimeoutSec(), 30)
+	timeout := dur(cmd.GetTimeoutSec(), 40)
 	geometry := getString(cmd.GetParams(), "geometry")
 	if geometry == "" {
 		geometry = "1280x800"
@@ -76,9 +78,11 @@ func (e *Executor) vncStart(cmd *ecpv1.Command) *ecpv1.CommandResult {
 	if password == "" {
 		password = "orangepi"
 	}
+	sudoPwd := getString(cmd.GetParams(), "sudo_password")
 	setup := "mkdir -p /root/.vnc && echo '" + password + "' | vncpasswd -f > /root/.vnc/passwd && chmod 600 /root/.vnc/passwd"
-	startCmd := "vncserver -geometry " + geometry + " -AlwaysShared"
+	startCmd := "vncserver -geometry " + geometry + " -alwaysshared"
 
+	// 1) 免密 sudo：直接全自动
 	if sudoOK() {
 		out, err := runBin(timeout, "sudo", "bash", "-c", setup+" && "+startCmd)
 		r := e.base(cmd)
@@ -93,7 +97,29 @@ func (e *Executor) vncStart(cmd *ecpv1.Command) *ecpv1.CommandResult {
 		return r
 	}
 
-	// 无免密 sudo：返回一次性授权脚本（含 sudoers 配置 + 设密码 + 启动）
+	// 2) 有 sudo 密码：自动授权（配置 sudoers 免密，仅本次使用密码、不持久化）+ 设密 + 启动
+	if sudoPwd != "" {
+		grant := "echo '" + sudoPwd + "' | sudo -S bash -c \"echo 'orangepi ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/ecp-agent && chmod 440 /etc/sudoers.d/ecp-agent\""
+		if _, err := runBin(timeout, "bash", "-c", grant); err != nil {
+			r := e.base(cmd)
+			r.Status = ecpv1.ResultStatus_RESULT_STATUS_FAILED
+			r.Message = "sudo 密码验证失败（" + err.Error() + "）"
+			return r
+		}
+		out, err := runBin(timeout, "sudo", "bash", "-c", setup+" && "+startCmd)
+		r := e.base(cmd)
+		r.Stdout = out
+		if err != nil {
+			r.Status = ecpv1.ResultStatus_RESULT_STATUS_FAILED
+			r.Message = err.Error()
+			return r
+		}
+		r.Status = ecpv1.ResultStatus_RESULT_STATUS_OK
+		r.Message = "VNC 已启动（端口 " + itoa(vncPortBase) + "，密码 " + password + "，已配置免密 sudo）"
+		return r
+	}
+
+	// 3) 既无免密也无密码：返回手动授权脚本（兜底）+ 提示前端询问 sudo 密码
 	r := e.base(cmd)
 	r.Status = ecpv1.ResultStatus_RESULT_STATUS_NEEDS_PRIVILEGE
 	r.PrivilegeScript = `#!/bin/bash
@@ -107,7 +133,7 @@ chmod 440 /etc/sudoers.d/ecp-agent
 # 3) 启动 VNC
 ` + startCmd + `
 echo "VNC 已启动，端口 5900"`
-	r.PrivilegeHint = "首次启动请在节点 sudo 执行一次（自动配置免密 sudo + VNC 密码设为 " + password + "），之后平台全自动"
+	r.PrivilegeHint = "需要节点 sudo 权限。更省事的做法：在前端弹窗输入一次 sudo 密码（仅本次授权使用，不保存），平台将自动配置免密 sudo 并完成启动。"
 	return r
 }
 
