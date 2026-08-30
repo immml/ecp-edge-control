@@ -1,4 +1,4 @@
-import{d as Xr,l as jr,N as Gr,o as Jr,c as Zr,b as et,f as ns,w as os,e as as,n as hs,t as Qr,O as en,u as tn,j as sn,a as ls,k as rn}from"./index-C9spV6ms.js";/**
+import{d as Xr,l as jr,N as Gr,o as Jr,c as Zr,b as et,f as ns,w as os,e as as,n as hs,t as Qr,O as en,u as tn,j as sn,a as ls,k as rn}from"./index-BAMVjnLy.js";/**
  * Copyright (c) 2014-2024 The xterm.js authors. All rights reserved.
  * @license MIT
  *

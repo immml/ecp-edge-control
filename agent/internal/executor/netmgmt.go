@@ -295,9 +295,91 @@ func (e *Executor) netSet(cmd *ecpv1.Command) *ecpv1.CommandResult {
 		}
 	case "virtual_mac":
 		return e.virtualMac(cmd, timeout)
+	case "vpn_deploy":
+		// 远程部署 xray VPN 跳板（本节点 = 一个独立出口）。
+		// 免密 sudo 自动执行；否则 NEEDS_PRIVILEGE 返回脚本供人工粘贴执行。
+		return e.cmdPriv(cmd, timeout, vpnDeployScript())
 	default:
 		return e.fail(cmd, "未知 net_set action: "+action)
 	}
+}
+
+// vpnDeployScript 返回在节点上部署 xray 跳板的完整 shell（幂等，多实例隔离）。
+func vpnDeployScript() string {
+	return `#!/bin/bash
+set -uo pipefail
+INST=$(hostname 2>/dev/null | tr -cd 'a-zA-Z0-9._-')
+INST=${INST:-node1}
+PORT=${PORT:-8444}
+PATH_WS="/ecp-vpn"
+UUID=$(cat /proc/sys/kernel/random/uuid)
+DIR=/opt/ecp-xray
+XRAY=$DIR/xray
+CONF=/etc/ecp-xray/config-${INST}.json
+UNIT=ecp-xray-${INST}.service
+
+# 1) xray 二进制（arm64/amd64）
+if [[ ! -x $XRAY ]]; then
+  ARCH=$(uname -m); [[ $ARCH == aarch64 ]] && ARCH=arm64; [[ $ARCH == x86_64 ]] && ARCH=amd64
+  VER=$(curl -fsSL --max-time 20 https://api.github.com/repos/XTLS/Xray-core/releases/latest 2>/dev/null | grep -oE '"tag_name": *"[^"]+"' | head -1 | cut -d'"' -f4)
+  VER=${VER:-v26.3.27}
+  URL="https://github.com/XTLS/Xray-core/releases/download/${VER}/Xray-linux-${ARCH}.zip"
+  TMP=$(mktemp -d)
+  if ! curl -fsSL --max-time 150 "$URL" -o "$TMP/x.zip"; then
+    echo "DOWNLOAD_FAIL: version=${VER} arch=${ARCH} 节点无法访问 GitHub 下载，请手动下载 $URL 解压 xray 到 $XRAY 后重跑"; exit 2
+  fi
+  mkdir -p "$DIR"
+  (cd "$TMP" && unzip -oq x.zip && (cp xray "$XRAY" 2>/dev/null || cp Xray "$XRAY" 2>/dev/null))
+  chmod +x "$XRAY"; rm -rf "$TMP"
+fi
+
+# 2) 配置（vmess+ws 回环，仅 Tunnel 回源可达）
+mkdir -p /etc/ecp-xray
+cat > "$CONF" <<JSON
+{
+  "inbounds": [{
+    "listen": "127.0.0.1", "port": $PORT, "protocol": "vmess",
+    "settings": { "clients": [{ "id": "$UUID", "alterId": 0 }] },
+    "streamSettings": { "network": "ws", "wsSettings": { "path": "$PATH_WS" } },
+    "sniffing": { "enabled": true, "destOverride": ["http", "tls"] }
+  }],
+  "outbounds": [
+    { "protocol": "freedom", "tag": "direct" },
+    { "protocol": "blackhole", "tag": "block" }
+  ],
+  "routing": {
+    "rules": [
+      { "type": "field", "protocol": ["bittorrent"], "outboundTag": "block" },
+      { "type": "field", "ip": ["geoip:private"], "outboundTag": "direct" }
+    ]
+  }
+}
+JSON
+chmod 0644 "$CONF"
+
+# 3) systemd 实例化单元 + 启动
+cat > /etc/systemd/system/$UNIT <<UNI
+[Unit]
+Description=ECP VPN Jump ${INST} (xray vmess+ws)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+ExecStart=$XRAY run -c $CONF
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=multi-user.target
+UNI
+systemctl daemon-reload
+systemctl enable --now "$UNIT" >/dev/null 2>&1 || true
+sleep 1
+if systemctl is-active --quiet "$UNIT"; then
+  echo "DEPLOY_OK uuid=$UUID unit=$UNIT listen=127.0.0.1:$PORT$PATH_WS"
+  echo "NEXT: Cloudflare Tunnel Public Hostname ${INST}.vpn.<你的域名> -> http://127.0.0.1:$PORT"
+else
+  echo "DEPLOY_FAILED unit=$UNIT"; journalctl -u "$UNIT" -n 10 --no-pager 2>/dev/null; exit 3
+fi`
 }
 
 // virtualMac 生成虚拟 MAC（unicast + locally administered）+ 同子网虚拟 IP，
@@ -375,6 +457,38 @@ func (e *Executor) netRunPriv(cmd *ecpv1.Command, timeout time.Duration, name st
 	r := e.base(cmd)
 	r.Status = ecpv1.ResultStatus_RESULT_STATUS_NEEDS_PRIVILEGE
 	r.PrivilegeScript = "sudo nmcli " + strings.Join(append([]string{name}, args...), " ")
+	r.Message = "该操作需要提权，请以 root 执行以下命令并确认后重试"
+	return r
+}
+
+// cmdPriv 提权执行一段 shell 脚本：免密 sudo 直行，否则 NEEDS_PRIVILEGE
+// 返回脚本供人工在节点上粘贴执行（与 netRunPriv 相同契约，适合多行部署脚本）。
+func (e *Executor) cmdPriv(cmd *ecpv1.Command, timeout time.Duration, script string) *ecpv1.CommandResult {
+	if sudoOK() {
+		tmp, err := os.CreateTemp("", "ecp-priv-*.sh")
+		if err != nil {
+			return e.fail(cmd, "创建临时脚本失败: "+errString(err))
+		}
+		tmpPath := tmp.Name()
+		defer os.Remove(tmpPath)
+		if _, err := tmp.WriteString(script); err != nil {
+			tmp.Close()
+			return e.fail(cmd, "写临时脚本失败: "+errString(err))
+		}
+		tmp.Close()
+		// 脚本文件在 /tmp 属于当前用户，root 可读；目录可能 sticky（/tmp 人人可写）
+		if err := os.Chmod(tmpPath, 0o600); err != nil {
+			return e.fail(cmd, "设置脚本权限失败: "+errString(err))
+		}
+		out, err := runBin(timeout, "sudo", "-n", "bash", tmpPath)
+		if err != nil {
+			return e.fail(cmd, "部署失败: "+errString(err))
+		}
+		return e.textResult(cmd, string(out))
+	}
+	r := e.base(cmd)
+	r.Status = ecpv1.ResultStatus_RESULT_STATUS_NEEDS_PRIVILEGE
+	r.PrivilegeScript = script
 	r.Message = "该操作需要提权，请以 root 执行以下命令并确认后重试"
 	return r
 }

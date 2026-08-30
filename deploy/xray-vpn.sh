@@ -61,7 +61,7 @@ info "实例: $INST_SAFE | 架构: $ARCH | 端口: 127.0.0.1:$PORT | path: $PATH
 if [[ ! -x "$XRAY" ]]; then
   info "下载 xray-core (linux/$ARCH)..."
   VER=$(curl -fsSL --max-time 20 https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep -oE '"tag_name": *"[^"]+"' | head -1 | cut -d'"' -f4)
-  [[ -n "$VER" ]] || VER="v25.1.30"
+  [[ -n "$VER" ]] || VER="v26.3.27"
   URL="https://github.com/XTLS/Xray-core/releases/download/${VER}/Xray-linux-${ARCH}.zip"
   TMP=$(mktemp -d)
   if ! curl -fsSL --max-time 120 "$URL" -o "$TMP/x.zip"; then

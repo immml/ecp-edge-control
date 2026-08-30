@@ -6,13 +6,14 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { api, type ApiNode } from '@/api/client'
+import { api, ResultStatus, type ApiNode, type CommandResult } from '@/api/client'
 
 const props = defineProps<{ node: ApiNode }>()
 
 // —— 本节点 xray 部署状态 ——
 const xrayStatus = ref<'checking' | 'running' | 'stopped' | 'absent' | 'error'>('checking')
 const xrayDetail = ref('')
+const deploying = ref(false)
 
 async function checkXray() {
   xrayStatus.value = 'checking'
@@ -25,7 +26,7 @@ async function checkXray() {
       xrayDetail.value = text.split('\n').slice(0, 4).join('\n')
     } else if (/No units found|could not be found|不存在|no units|0 loaded units/.test(text)) {
       xrayStatus.value = 'absent'
-      xrayDetail.value = '本节点尚未部署 xray（VPN 跳板）。点下方「部署跳板」查看步骤。'
+      xrayDetail.value = '本节点尚未部署 xray（VPN 跳板），点下方「一键部署」。'
     } else if (/inactive|failed|unknown/.test(text)) {
       xrayStatus.value = 'stopped'
       xrayDetail.value = text.trim() || 'xray 单元存在但未运行'
@@ -36,6 +37,55 @@ async function checkXray() {
   } catch (e: any) {
     xrayStatus.value = 'error'
     xrayDetail.value = e?.message || '查询失败'
+  }
+}
+
+// —— 一键部署跳板（agent 免密 sudo 自动执行；否则提示手动执行）——
+async function deployJump() {
+  if (deploying.value) return
+  deploying.value = true
+  try {
+    const r = await api.execCommand(props.node.id, 'net_set', { action: 'vpn_deploy' }, 300)
+    await handleDeployResult(r)
+    await checkXray()
+  } catch (e: any) {
+    ElMessage.error(`部署失败：${e?.message || ''}`)
+  } finally {
+    deploying.value = false
+  }
+}
+
+async function handleDeployResult(r: CommandResult | undefined) {
+  if (!r) return
+  if (r.status === ResultStatus.NEEDS_PRIVILEGE) {
+    // agent 无免密 sudo：给出脚本，用户手动执行
+    await ElMessageBox.confirm(
+      `<div style="font-size:13px;line-height:1.7">
+         <p style="margin:0 0 8px">该节点未配置免密 sudo，请在节点 <b>${props.node.hostname || props.node.id}</b> 上以 root 执行：</p>
+         <pre style="background:var(--el-fill-color-light);padding:10px;border-radius:6px;overflow:auto;font-size:12px;white-space:pre-wrap">${(r.privilege_script || '').replace(/</g, '&lt;')}</pre>
+         <p style="color:var(--el-text-color-secondary);margin-top:8px">执行完点「已执行，重新检测」。</p>
+       </div>`,
+      '部署跳板需要提权',
+      { dangerouslyUseHTMLString: true, confirmButtonText: '已执行，重新检测', cancelButtonText: '关闭', showClose: false },
+    ).then(async () => {
+      await checkXray()
+    }).catch(() => null)
+    return
+  }
+  const out = (r.stdout || '') + (r.message || '')
+  if (/DEPLOY_OK/.test(out)) {
+    // 自动回填 UUID
+    const m = out.match(/uuid=([0-9a-f-]{36})/i)
+    if (m?.[1] && !jump.value.uuid) jump.value.uuid = m[1].toLowerCase()
+    if (!jump.value.name) jump.value.name = props.node.hostname || props.node.id
+    ElMessage.success('跳板部署成功，已自动填入 UUID')
+    xrayDetail.value = out
+  } else if (/DOWNLOAD_FAIL/.test(out)) {
+    ElMessage.error('部署失败：节点无法访问 GitHub 下载 xray，需手动下载二进制')
+    xrayDetail.value = out
+  } else {
+    ElMessage.warning('部署结果：' + out.slice(0, 300))
+    xrayDetail.value = out
   }
 }
 
@@ -93,21 +143,6 @@ function genUuid() {
   jump.value.uuid = s.join('')
 }
 
-// —— 部署指引 ——
-function showDeployHint() {
-  ElMessageBox.alert(
-    `<div style="font-size:13px;line-height:1.8">
-       <p style="margin:0 0 8px">在本节点（root）执行部署脚本，把本盒子变成 VPN 出口：</p>
-       <pre style="background:var(--el-fill-color-light);padding:10px;border-radius:6px;overflow:auto;font-size:12px;white-space:pre-wrap">sudo bash deploy/xray-vpn.sh --name ${props.node.hostname || 'node1'}</pre>
-       <p style="margin:8px 0">再在 Cloudflare Zero Trust 给本节点建一条隧道：</p>
-       <pre style="background:var(--el-fill-color-light);padding:10px;border-radius:6px;overflow:auto;font-size:12px;white-space:pre-wrap">${props.node.hostname || 'node1'}.vpn.你的域名 → http://127.0.0.1:8444</pre>
-       <p style="margin:8px 0 0">然后把脚本输出的 <b>UUID</b> 与隧道域名填到下方表单保存，导出 Clash 时本节点就会作为一个可选出口。</p>
-     </div>`,
-    `${props.node.hostname || props.node.id} · 部署 VPN 跳板`,
-    { dangerouslyUseHTMLString: true, confirmButtonText: '知道了', showClose: true },
-  ).catch(() => null)
-}
-
 const statusLabel = computed(() => ({
   checking: '检测中…',
   running: '已运行',
@@ -134,9 +169,14 @@ onMounted(() => { checkXray(); loadJump() })
       <div class="card-body">
         <pre v-if="xrayDetail" class="mono" style="white-space:pre-wrap;font-size:12px;margin:0 0 8px">{{ xrayDetail }}</pre>
         <div style="display: flex; gap: 8px; flex-wrap: wrap">
-          <el-button size="small" type="primary" plain @click="showDeployHint">部署跳板（xray-vpn.sh）</el-button>
+          <el-button size="small" type="primary" :loading="deploying" @click="deployJump">
+            {{ xrayStatus === 'running' ? '重新部署' : '一键部署跳板' }}
+          </el-button>
           <el-button size="small" @click="checkXray">重新检测</el-button>
         </div>
+        <el-alert v-if="xrayStatus === 'running'" type="success" :closable="false" show-icon style="margin-top: 10px"
+          title="部署成功！下一步：配 Cloudflare Tunnel"
+          :description="`Zero Trust → Tunnels → 给本节点建隧道：${props.node.hostname || 'node1'}.vpn.你的域名 → http://127.0.0.1:8444。然后把域名填到下方表单保存。`" />
       </div>
     </div>
 
