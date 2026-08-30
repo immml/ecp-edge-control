@@ -107,7 +107,7 @@ chmod 440 /etc/sudoers.d/ecp-agent
 # 3) 启动 VNC
 ` + startCmd + `
 echo "VNC 已启动，端口 5900"`
-	r.PrivilegeHint = "首次启动请在节点 sudo 执行一次（自动配置免密 sudo + VNC 密码设为 orangepi），之后平台全自动"
+	r.PrivilegeHint = "首次启动请在节点 sudo 执行一次（自动配置免密 sudo + VNC 密码设为 " + password + "），之后平台全自动"
 	return r
 }
 
