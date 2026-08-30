@@ -1,10 +1,12 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -471,3 +473,79 @@ func runBin(timeout time.Duration, name string, args ...string) ([]byte, error) 
 
 // osGeteuid 返回当前有效用户 ID（便于测试注入）。
 var osGeteuid = func() int { return os.Geteuid() }
+
+// tailscaleLoginURL 触发交互登录：后台启动 tailscale up（不带 authkey 走交互登录），
+// 从输出中抓出 https://login.tailscale.com/... 链接返回，前端在新标签页打开让用户去授权。
+// tailscaled daemon 继续在后台运行，用户授权后自动完成注册，agent 端无需再次调用。
+func (e *Executor) tailscaleLoginURL(cmd *ecpv1.Command) *ecpv1.CommandResult {
+	// 1) 若已登录：直接返回状态，不发起新的 up
+	if out, err := runBin(3*time.Second, "tailscale", "status", "--json"); err == nil {
+		var st struct {
+			BackendState string `json:"BackendState"`
+		}
+		if json.Unmarshal(out, &st) == nil && st.BackendState == "Running" {
+			r := e.base(cmd)
+			r.Status = ecpv1.ResultStatus_RESULT_STATUS_OK
+			r.Message = "已登录"
+			data, _ := json.Marshal(map[string]any{"logged_in": true, "url": "", "summary": summarizeTailsale(string(out))})
+			r.Stdout = data
+			return r
+		}
+	}
+	// 2) 后台跑 tailscale up，捕获输出中的 login URL（8s 后用 SIGKILL 结束 up，
+	//    tailscaled daemon 仍运行等待用户授权）
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	//nolint:gosec // 受控命令：Tailscale 官方 CLI
+	c := exec.CommandContext(ctx, "tailscale", "up", "--ssh=false", "--accept-routes=false", "--netfilter-mode=off")
+	var out bytes.Buffer
+	c.Stdout = &out
+	c.Stderr = &out
+	_ = c.Start()
+	done := make(chan struct{})
+	go func() {
+		_ = c.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		_ = c.Process.Kill()
+		<-done
+	}
+	// 3) 抓 URL：https://login.tailscale.com/a/xxxx 或 https://login.tailscale.com/xxx
+	re := regexp.MustCompile(`https://login\.tailscale\.com/[^\s'"]+`)
+	m := re.FindString(string(out.Bytes()))
+	data, _ := json.Marshal(map[string]any{
+		"logged_in": m == "",
+		"url":       m,
+		"raw":       strings.TrimSpace(string(out.Bytes()))[:min(len(string(out.Bytes())), 600)],
+	})
+	r := e.base(cmd)
+	r.Stdout = data
+	if m == "" {
+		r.Status = ecpv1.ResultStatus_RESULT_STATUS_FAILED
+		r.Message = "未获取到登录链接"
+	} else {
+		r.Status = ecpv1.ResultStatus_RESULT_STATUS_OK
+		r.Message = "请在新标签页打开链接完成登录"
+	}
+	return r
+}
+
+// summarizeTailsale 提取 tailscale status JSON 的关键字段为一行。
+func summarizeTailsale(raw string) string {
+	var st struct {
+		Self struct {
+			HostName string `json:"HostName"`
+		} `json:"Self"`
+		BackendState string `json:"BackendState"`
+	}
+	if err := json.Unmarshal([]byte(raw), &st); err != nil {
+		return ""
+	}
+	if st.BackendState == "Running" {
+		return "已连接 " + st.Self.HostName
+	}
+	return "未登录"
+}

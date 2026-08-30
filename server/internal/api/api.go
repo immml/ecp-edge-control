@@ -433,7 +433,6 @@ func statusOf(online bool) string {
 func commandType(s string) ecpv1.CommandType {
 	norm := strings.ToUpper(strings.TrimPrefix(s, "COMMAND_TYPE_"))
 	for _, t := range []ecpv1.CommandType{
-		ecpv1.CommandType_COMMAND_TYPE_SHELL,
 		ecpv1.CommandType_COMMAND_TYPE_FILE_LIST,
 		ecpv1.CommandType_COMMAND_TYPE_FILE_READ,
 		ecpv1.CommandType_COMMAND_TYPE_FILE_WRITE,
@@ -457,6 +456,7 @@ func commandType(s string) ecpv1.CommandType {
 		ecpv1.CommandType_COMMAND_TYPE_FRP_DOWN,
 		ecpv1.CommandType_COMMAND_TYPE_FRP_CONFIG_GET,
 		ecpv1.CommandType_COMMAND_TYPE_FRP_CONFIG_SET,
+		ecpv1.CommandType_COMMAND_TYPE_TAILSCALE_LOGIN_URL,
 	} {
 		if strings.TrimPrefix(t.String(), "COMMAND_TYPE_") == norm {
 			return t

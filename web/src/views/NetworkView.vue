@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { Refresh, Edit, Plus, View, VideoPlay, VideoPause } from '@element-plus/icons-vue'
+import { Refresh, VideoPlay, VideoPause, Upload } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { api, type ApiNode, type CommandResult } from '@/api/client'
@@ -11,7 +11,7 @@ const busy = ref<string>('')
 
 interface FrpInstance {
   name: string
-  source: string // systemd | process | config
+  source: string
   unit: string
   running: boolean
   enabled: string
@@ -22,8 +22,13 @@ interface FrpInstance {
   tunnels?: string[]
 }
 
+interface TailscaleState {
+  loaded: boolean
+  loggedIn: boolean
+  summary: string
+}
 interface NetState {
-  tailscale: { loaded: boolean; ok: boolean; summary: string }
+  ts: TailscaleState
   frp: { loaded: boolean; instances: FrpInstance[] }
 }
 const states = ref<Record<string, NetState>>({})
@@ -31,7 +36,7 @@ const states = ref<Record<string, NetState>>({})
 function stateOf(nodeId: string): NetState {
   if (!states.value[nodeId]) {
     states.value[nodeId] = {
-      tailscale: { loaded: false, ok: false, summary: '—' },
+      ts: { loaded: false, loggedIn: false, summary: '—' },
       frp: { loaded: false, instances: [] },
     }
   }
@@ -53,53 +58,106 @@ async function load() {
 
 async function loadNodeState(n: ApiNode) {
   const s = stateOf(n.id)
+  // Tailscale
   try {
     const r = await api.execCommand(n.id, 'tailscale_status', {})
-    s.tailscale.loaded = true
-    s.tailscale.ok = String(r.status).includes('OK')
-    s.tailscale.summary = summarize(r.stdout, 6)
+    const text = (r.stdout || '').trim()
+    s.ts.loaded = true
+    s.ts.loggedIn = !!text && !text.startsWith('Log')
+    s.ts.summary = summarizeTs(text)
   } catch {
-    s.tailscale.loaded = true
-    s.tailscale.summary = '查询失败（可能未安装）'
+    s.ts.loaded = true
+    s.ts.summary = '查询失败'
+    s.ts.loggedIn = false
   }
+  // FRP
   try {
     const r = await api.execCommand(n.id, 'frp_status', {})
-    s.frp.loaded = true
     try {
-      const arr = JSON.parse(r.stdout || '[]')
-      s.frp.instances = Array.isArray(arr) ? arr : []
+      s.frp.instances = JSON.parse(r.stdout || '[]') || []
     } catch {
       s.frp.instances = []
     }
+    s.frp.loaded = true
   } catch {
     s.frp.loaded = true
   }
 }
 
-function summarize(stdout: string, lines: number): string {
+function summarizeTs(stdout: string): string {
   const t = (stdout || '').trim()
-  if (!t) return '(空输出)'
-  return t.split('\n').slice(0, lines).join('\n')
+  if (!t || t.startsWith('Log')) return '未登录'
+  const lines = t.split('\n').slice(0, 4)
+  return lines.join('\n')
 }
 
-// —— Tailscale 操作 ——
-async function doTailscale(n: ApiNode, action: 'up' | 'down') {
-  const key = `${n.id}:ts:${action}`
+// —— Tailscale 登录 ——
+async function tailscaleLogin(n: ApiNode) {
+  const key = `${n.id}:ts:login`
   if (busy.value) return
   busy.value = key
   try {
-    const r = await api.execCommand(n.id, `tailscale_${action}`, {})
-    await handlePrivilegeResult(n, r, `Tailscale ${action === 'up' ? '启用' : '停用'}`)
-    await loadNodeState(n)
+    const r = await api.execCommand(n.id, 'tailscale_login_url', {})
+    const j = JSON.parse(r.stdout || '{}')
+    if (j.logged_in && !j.url) {
+      ElMessage.success(`${n.hostname || n.id} 已登录`)
+      await loadNodeState(n)
+      return
+    }
+    if (j.url) {
+      // 在新标签页打开登录 URL + 显示提示
+      window.open(j.url, '_blank', 'noopener')
+      await ElMessageBox.confirm(
+        `<div style="font-size:13px;line-height:1.7">
+           <p>已在新标签页打开 Tailscale 登录链接，请在 <b>login.tailscale.com</b> 完成授权后回到这里。</p>
+           <p>登录链接：<a href="${j.url}" target="_blank" class="mono" style="word-break:break-all">${j.url}</a></p>
+           <p style="color:var(--el-text-color-secondary);margin-top:8px">完成授权后点「已完成」刷新状态。</p>
+         </div>`,
+        `${n.hostname || n.id} · Tailscale 登录`,
+        {
+          dangerouslyUseHTMLString: true,
+          confirmButtonText: '已完成，刷新状态',
+          cancelButtonText: '稍后',
+        },
+      ).catch(() => null)
+      await loadNodeState(n)
+    } else {
+      ElMessage.warning(`未获取到登录链接：${j.raw || r.message || ''}`)
+    }
   } catch (e: any) {
-    ElMessage.error(`操作失败：${e?.message || ''}`)
+    ElMessage.error(`登录失败：${e?.message || ''}`)
   } finally {
     busy.value = ''
   }
 }
 
-// —— FRP 操作 ——
-async function frpInstanceAction(n: ApiNode, inst: FrpInstance, action: 'up' | 'down') {
+// —— Tailscale 停用/登出 ——
+async function tailscaleDown(n: ApiNode) {
+  await doTailscaleAction(n, 'tailscale_down', '停用')
+}
+async function doTailscaleAction(n: ApiNode, type: string, label: string) {
+  const key = `${n.id}:ts:${type}`
+  if (busy.value) return
+  busy.value = key
+  try {
+    const r = await api.execCommand(n.id, type, {})
+    await handlePrivilegeResult(n, r, label)
+    await loadNodeState(n)
+  } catch (e: any) {
+    ElMessage.error(`${label}失败：${e?.message || ''}`)
+  } finally {
+    busy.value = ''
+  }
+}
+
+// —— FRP 启停 ——
+async function frpUp(n: ApiNode, inst: FrpInstance) {
+  await frpAction(n, inst, 'up')
+}
+async function frpDown(n: ApiNode, inst: FrpInstance) {
+  await frpAction(n, inst, 'down')
+}
+async function frpAction(n: ApiNode, inst: FrpInstance, action: 'up' | 'down') {
   const key = `${n.id}:frp:${inst.name}:${action}`
   if (busy.value) return
   busy.value = key
@@ -114,95 +172,76 @@ async function frpInstanceAction(n: ApiNode, inst: FrpInstance, action: 'up' | '
   }
 }
 
-// 查看配置
-async function viewConfig(n: ApiNode, inst: FrpInstance) {
+// —— FRP 编辑 frpc.ini ——
+const editVisible = ref(false)
+const editInst = ref<FrpInstance | null>(null)
+const editContent = ref('')
+const editSaving = ref(false)
+
+async function editFrpcIni(n: ApiNode, inst: FrpInstance) {
   try {
     const r = await api.execCommand(n.id, 'frp_config_get', { instance: inst.name })
-    const content = r.stdout || '(空配置)'
-    await ElMessageBox.alert(
-      `<pre style="background:var(--el-fill-color-light);padding:10px;border-radius:6px;overflow:auto;font-size:12px;white-space:pre-wrap;max-height:50vh;margin:0">${content.replace(/</g, '&lt;')}</pre>`,
-      `${n.hostname || n.id} · frpc[${inst.name}] 配置（${r.message || '—'}）`,
-      { dangerouslyUseHTMLString: true, confirmButtonText: '关闭' },
-    ).catch(() => null)
+    editInst.value = inst
+    editContent.value = r.stdout || ''
+    editVisible.value = true
   } catch (e: any) {
     ElMessage.error(`读取配置失败：${e?.message || ''}`)
   }
 }
 
-// 新增隧道
-async function addTunnel(n: ApiNode, inst: FrpInstance) {
+async function saveFrpcIni(n: ApiNode) {
+  if (!editInst.value) return
+  editSaving.value = true
   try {
-    const res = await ElMessageBox.prompt(
-      `在 frpc[${inst.name}] 上新增隧道。格式（一行，逗号分隔）：名称,类型,本地端口,远程端口,域名(可选)\n示例：web,tcp,8080,18080,myweb.example.com`,
-      '新增隧道',
-      {
-        inputPlaceholder: 'web,tcp,8080,18080,myweb.example.com',
-        inputValidator: (v: string) => (v && v.split(',').length >= 3 ? true : '格式：名称,类型,本地端口,远程端口[,域名]'),
-      },
-    ).catch(() => null)
-    if (!res || !res.value) return
-    const parts = (res.value as string).split(',').map((s: string) => s.trim())
-    const [name, type, localPort, remotePort, domain] = parts
-    const tunnel: Record<string, unknown> = {
-      name,
-      type: type || 'tcp',
-      local_port: Number(localPort),
-    }
-    if (remotePort && Number(remotePort) > 0) tunnel.remote_port = Number(remotePort)
-    if (domain) tunnel.custom_domains = domain
     const r = await api.execCommand(n.id, 'frp_config_set', {
-      instance: inst.name,
-      tunnel: JSON.stringify(tunnel),
+      instance: editInst.value.name,
+      content: editContent.value,
     })
-    await handlePrivilegeResult(n, r, `新增隧道 ${name}`)
+    if (String(r.status).includes('NEEDS_PRIVILEGE')) {
+      await showPrivilegeDialog(n, '保存 frpc.ini', r)
+    } else if (String(r.status).includes('OK')) {
+      ElMessage.success('保存成功')
+      editVisible.value = false
+    } else {
+      ElMessage.warning(`保存：${r.message || '未成功'}`)
+    }
     await loadNodeState(n)
   } catch (e: any) {
-    ElMessage.error(`新增隧道失败：${e?.message || ''}`)
+    ElMessage.error(`保存失败：${e?.message || ''}`)
+  } finally {
+    editSaving.value = false
   }
 }
 
-// 编辑配置（全量）
-async function editConfig(n: ApiNode, inst: FrpInstance) {
-  try {
-    const r = await api.execCommand(n.id, 'frp_config_get', { instance: inst.name })
-    const cur = r.stdout || ''
-    const res = await ElMessageBox.prompt(
-      '编辑 frpc 配置（ini 格式）。保存后需手动重启 frpc 生效。',
-      `编辑配置 · ${n.hostname || n.id} · frpc[${inst.name}]`,
-      {
-        inputType: 'textarea',
-        inputValue: cur,
-        inputPlaceholder: '[common]\nserver_addr = 你的frps地址\nserver_port = 7000\n\ntype = tcp\n...',
-        inputValidator: (v: string) => (v.trim() ? true : '配置不能为空'),
-      },
-    ).catch(() => null)
-    if (!res || res.value === null || res.value === undefined) return
-    const value = res.value as string
-    const wr = await api.execCommand(n.id, 'frp_config_set', { instance: inst.name, content: value })
-    await handlePrivilegeResult(n, wr, '保存配置')
-    await loadNodeState(n)
-  } catch (e: any) {
-    ElMessage.error(`编辑配置失败：${e?.message || ''}`)
-  }
+// 上传 frpc.ini 到 textarea
+function handleUpload(file: File) {
+  const reader = new FileReader()
+  reader.onload = () => { editContent.value = String(reader.result || '') }
+  reader.readAsText(file)
+  return false // 阻止 el-upload 默认行为
 }
 
 async function handlePrivilegeResult(n: ApiNode, r: CommandResult, label: string) {
   if (String(r.status).includes('NEEDS_PRIVILEGE')) {
-    const script = r.privilege_script || ''
-    await ElMessageBox.confirm(
-      `<div style="font-size:13px;line-height:1.7">
-         <p style="margin:0 0 8px">${r.privilege_hint || '该操作需要 root 权限'}（平台不自行提权）。</p>
-         <p style="margin:0 0 6px">请在节点 <b>${n.hostname || n.id}</b> 上执行：</p>
-         <pre style="background:var(--el-fill-color-light);padding:10px;border-radius:6px;overflow:auto;font-size:12px;white-space:pre-wrap">${script.replace(/</g, '&lt;')}</pre>
-       </div>`,
-      `${n.hostname || n.id} · ${label}需要提权`,
-      { dangerouslyUseHTMLString: true, confirmButtonText: '我已执行', cancelButtonText: '取消', showClose: false },
-    ).catch(() => null)
+    await showPrivilegeDialog(n, label, r)
   } else if (String(r.status).includes('OK')) {
     ElMessage.success(`${n.hostname || n.id} · ${label}成功`)
   } else {
     ElMessage.warning(`${n.hostname || n.id} · ${label}：${r.message || '未成功'}`)
   }
+}
+
+async function showPrivilegeDialog(n: ApiNode, label: string, r: CommandResult) {
+  const script = r.privilege_script || ''
+  await ElMessageBox.confirm(
+    `<div style="font-size:13px;line-height:1.7">
+       <p style="margin:0 0 8px">${r.privilege_hint || '该操作需要 root 权限'}（平台不自行提权）。</p>
+       <p style="margin:0 0 6px">请在节点 <b>${n.hostname || n.id}</b> 上执行：</p>
+       <pre style="background:var(--el-fill-color-light);padding:10px;border-radius:6px;overflow:auto;font-size:12px;white-space:pre-wrap">${script.replace(/</g, '&lt;')}</pre>
+     </div>`,
+    `${n.hostname || n.id} · ${label}需要提权`,
+    { dangerouslyUseHTMLString: true, confirmButtonText: '我已执行', cancelButtonText: '关闭', showClose: false },
+  ).catch(() => null)
 }
 
 onMounted(load)
@@ -212,8 +251,7 @@ onMounted(load)
   <div style="display: flex; flex-direction: column; gap: 14px">
     <div style="display: flex; align-items: center; justify-content: space-between">
       <div class="text-secondary" style="font-size: 13px">
-        双路组网：<b>Tailscale</b>（主通道，WireGuard mesh）＋ <b>FRP</b>（备用中继，支持多 frpc 实例：
-        ChmlFrp / HayFRP / 自建 frps 等）。共 {{ nodes.length }} 个在线节点。
+        组网管理 · {{ nodes.length }} 个在线节点。FRP 多 frpc 实例（ChmlFrp / HayFRP / 自建 frps）+ Tailscale mesh。
       </div>
       <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
     </div>
@@ -232,24 +270,7 @@ onMounted(load)
       </template>
 
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px">
-        <!-- Tailscale 卡片 -->
-        <div class="card" style="margin: 0">
-          <div class="card-header">
-            <span>Tailscale</span>
-            <el-tag size="small" :type="stateOf(n.id).tailscale.ok ? 'success' : 'info'">
-              {{ stateOf(n.id).tailscale.ok ? '已连接' : '—' }}
-            </el-tag>
-          </div>
-          <div class="card-body">
-            <pre v-loading="!stateOf(n.id).tailscale.loaded" style="white-space: pre-wrap; font-size: 12px; line-height: 1.6; margin: 0; min-height: 40px">{{ stateOf(n.id).tailscale.summary }}</pre>
-            <div style="display: flex; gap: 8px; margin-top: 10px">
-              <el-button size="small" type="primary" :loading="busy === `${n.id}:ts:up`" @click="doTailscale(n, 'up')">启用</el-button>
-              <el-button size="small" type="warning" :loading="busy === `${n.id}:ts:down`" @click="doTailscale(n, 'down')">停用</el-button>
-            </div>
-          </div>
-        </div>
-
-        <!-- FRP 多实例卡片 -->
+        <!-- FRP 左：编辑 frpc.ini + 实例操作 -->
         <div class="card" style="margin: 0">
           <div class="card-header">
             <span>FRP（多 frpc 实例）</span>
@@ -264,24 +285,77 @@ onMounted(load)
                 <b style="font-size: 13px">{{ inst.name }}</b>
                 <el-tag size="small" :type="inst.running ? 'success' : 'info'">{{ inst.running ? '运行中' : '未运行' }}</el-tag>
                 <el-tag v-if="inst.enabled === 'enabled'" size="small" type="primary">自启</el-tag>
-                <el-tag v-if="inst.configured" size="small">配置:{{ inst.config }}</el-tag>
-                <span v-if="inst.tunnels?.length" class="text-secondary" style="font-size: 12px">隧道: {{ inst.tunnels.join(', ') }}</span>
+                <el-tag v-if="inst.configured" size="small">ini: {{ inst.config }}</el-tag>
               </div>
               <div v-if="inst.cmdline" class="mono text-secondary" style="font-size: 11.5px; margin-top: 4px; word-break: break-all">{{ inst.cmdline }}</div>
               <div style="display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap">
-                <el-button size="small" :icon="VideoPlay" :loading="busy === `${n.id}:frp:${inst.name}:up`" @click="frpInstanceAction(n, inst, 'up')">启动</el-button>
-                <el-button size="small" :icon="VideoPause" :loading="busy === `${n.id}:frp:${inst.name}:down`" @click="frpInstanceAction(n, inst, 'down')">停止</el-button>
-                <el-button size="small" :icon="View" @click="viewConfig(n, inst)">配置</el-button>
-                <el-button size="small" :icon="Edit" @click="editConfig(n, inst)">编辑</el-button>
-                <el-button size="small" type="primary" plain :icon="Plus" @click="addTunnel(n, inst)">新增隧道</el-button>
+                <el-button size="small" :icon="VideoPlay" :loading="busy === `${n.id}:frp:${inst.name}:up`" @click="frpUp(n, inst)">启动</el-button>
+                <el-button size="small" :icon="VideoPause" :loading="busy === `${n.id}:frp:${inst.name}:down`" @click="frpDown(n, inst)">停止</el-button>
+                <el-button size="small" type="primary" plain @click="editFrpcIni(n, inst)">编辑 frpc.ini</el-button>
+              </div>
+              <div v-if="inst.tunnels?.length" class="text-secondary" style="font-size: 11.5px; margin-top: 4px">
+                隧道段: {{ inst.tunnels.join(', ') }}
               </div>
             </div>
-            <div class="text-secondary" style="font-size: 12px; margin-top: 4px">
-              ※ 编辑配置/新增隧道/启停若需 root 会弹出可复制脚本；免密 sudo 的节点直接执行。
+          </div>
+        </div>
+
+        <!-- Tailscale 右：登录态 + 登录入口 -->
+        <div class="card" style="margin: 0">
+          <div class="card-header">
+            <span>Tailscale（组网 / 登录）</span>
+            <el-tag v-if="stateOf(n.id).ts.loaded" size="small" :type="stateOf(n.id).ts.loggedIn ? 'success' : 'warning'">
+              {{ stateOf(n.id).ts.loggedIn ? '已登录' : '未登录' }}
+            </el-tag>
+          </div>
+          <div class="card-body" v-loading="!stateOf(n.id).ts.loaded">
+            <pre v-if="stateOf(n.id).ts.loggedIn" style="white-space: pre-wrap; font-size: 12px; line-height: 1.6; margin: 0; min-height: 60px">{{ stateOf(n.id).ts.summary }}</pre>
+            <div v-else style="min-height: 60px">
+              <el-alert type="warning" :closable="false" show-icon title="节点未登录 tailnet" description="点击下方「登录」按钮，会在新标签页打开 Tailscale 官方认证页面，完成授权后自动激活。" />
+            </div>
+            <div style="display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap">
+              <el-button v-if="!stateOf(n.id).ts.loggedIn" type="primary" :loading="busy === `${n.id}:ts:login`" @click="tailscaleLogin(n)">登录</el-button>
+              <el-button v-if="stateOf(n.id).ts.loggedIn" type="warning" :loading="busy === `${n.id}:ts:down`" @click="tailscaleDown(n)">停用</el-button>
+              <el-button size="small" @click="loadNodeState(n)">刷新状态</el-button>
             </div>
           </div>
         </div>
       </div>
     </el-card>
+
+    <!-- 编辑 frpc.ini 弹窗 -->
+    <el-dialog
+      v-model="editVisible"
+      :title="`编辑 frpc.ini · ${editInst?.name || ''}`"
+      width="780px"
+      :close-on-click-modal="false"
+    >
+      <el-alert type="info" :closable="false" show-icon style="margin-bottom: 10px"
+        title="说明"
+        description="完整编辑 frpc.ini 内容：[common] 段（server_addr/server_port 等）+ 各 [tunnel] 段（type/local_port/remote_port 等）。支持直接上传 frpc.ini 文件或粘贴文本。"
+      />
+      <el-upload
+        :show-file-list="false"
+        :auto-upload="false"
+        :multiple="false"
+        accept=".ini,.toml,.conf,text/*"
+        :on-change="(f: any) => f?.raw && handleUpload(f.raw as File)"
+        style="margin-bottom: 8px"
+      >
+        <el-button size="small" :icon="Upload">上传 frpc.ini 文件</el-button>
+      </el-upload>
+      <el-input
+        v-model="editContent"
+        type="textarea"
+        :rows="22"
+        :spellcheck="false"
+        style="font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px"
+        placeholder="[common]&#10;server_addr = your.frps.host&#10;server_port = 7000&#10;&#10;[web]&#10;type = tcp&#10;local_ip = 127.0.0.1&#10;local_port = 8080&#10;remote_port = 18080"
+      />
+      <template #footer>
+        <el-button @click="editVisible = false">取消</el-button>
+        <el-button type="primary" :loading="editSaving" @click="saveFrpcIni">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>

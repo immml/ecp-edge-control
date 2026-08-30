@@ -59,6 +59,8 @@ func (e *Executor) Handle(cmd *ecpv1.Command) *ecpv1.CommandResult {
 			return e.tailscaleUp(cmd)
 		case ecpv1.CommandType_COMMAND_TYPE_TAILSCALE_DOWN:
 			return e.tailscaleDown(cmd)
+		case ecpv1.CommandType_COMMAND_TYPE_TAILSCALE_LOGIN_URL:
+			return e.tailscaleLoginURL(cmd)
 		case ecpv1.CommandType_COMMAND_TYPE_FRP_STATUS:
 			return e.frpStatus(cmd)
 		case ecpv1.CommandType_COMMAND_TYPE_FRP_UP:
