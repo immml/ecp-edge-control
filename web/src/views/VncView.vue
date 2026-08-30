@@ -5,7 +5,7 @@ import { Refresh, VideoPlay, VideoPause } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import RFB from '@novnc/novnc'
 
-import { api, type CommandResult } from '@/api/client'
+import { api, ResultStatus, type CommandResult } from '@/api/client'
 
 const route = useRoute()
 const router = useRouter()
@@ -46,7 +46,7 @@ async function stopVnc() {
 }
 
 async function handleVncResult(r: CommandResult, label: string) {
-  if (String(r.status).includes('NEEDS_PRIVILEGE')) {
+  if (r.status === ResultStatus.NEEDS_PRIVILEGE) {
     const script = r.privilege_script || ''
     const hint = r.privilege_hint || '需要 root 权限（平台不自行提权）'
     const res = await ElMessageBoxConfirm(
@@ -57,7 +57,7 @@ async function handleVncResult(r: CommandResult, label: string) {
       `${label}需要提权`,
     )
     if (res) await loadStatus()
-  } else if (String(r.status).includes('OK')) {
+  } else if (r.status === ResultStatus.OK) {
     ElMessage.success(`${label}成功`)
   } else {
     ElMessage.warning(`${label}：${r.message || '未成功'}`)

@@ -112,8 +112,17 @@ export interface ContainerInfo {
   managed: string
 }
 
+// 与 proto ecp.v1.ResultStatus 对应（server 用 JSON 序列化 enum 输出数字）
+export const ResultStatus = {
+  OK: 1,
+  FAILED: 2,
+  NEEDS_PRIVILEGE: 3,
+  TIMEOUT: 4,
+  REJECTED: 5,
+} as const
+
 export interface CommandResult {
-  status: string
+  status: number
   message: string
   stdout: string
   privilege_hint?: string
@@ -193,6 +202,8 @@ class ApiClient {
 
   async execCommand(nodeId: string, type: string, params?: Record<string, unknown>): Promise<CommandResult> {
     const r = await this.request<CommandResult>('POST', `api/v1/nodes/${nodeId}/command`, { type, params })
+    // status 归一化为数字（兼容未来 protojson 字符串形态）
+    r.status = Number(r.status) || 0
     // protojson 把 bytes 字段（stdout）序列化为 base64，这里统一还原为 UTF-8 文本
     if (r && typeof r.stdout === 'string' && r.stdout) {
       try {

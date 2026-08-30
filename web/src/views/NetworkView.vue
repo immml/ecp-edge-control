@@ -3,7 +3,7 @@ import { onMounted, ref } from 'vue'
 import { Refresh, VideoPlay, VideoPause, Upload } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { api, type ApiNode, type CommandResult } from '@/api/client'
+import { api, ResultStatus, type ApiNode, type CommandResult } from '@/api/client'
 
 const nodes = ref<ApiNode[]>([])
 const loading = ref(false)
@@ -197,9 +197,9 @@ async function saveFrpcIni(n: ApiNode) {
       instance: editInst.value.name,
       content: editContent.value,
     })
-    if (String(r.status).includes('NEEDS_PRIVILEGE')) {
+    if (r.status === ResultStatus.NEEDS_PRIVILEGE) {
       await showPrivilegeDialog(n, '保存 frpc.ini', r)
-    } else if (String(r.status).includes('OK')) {
+    } else if (r.status === ResultStatus.OK) {
       ElMessage.success('保存成功')
       editVisible.value = false
     } else {
@@ -222,9 +222,9 @@ function handleUpload(file: File) {
 }
 
 async function handlePrivilegeResult(n: ApiNode, r: CommandResult, label: string) {
-  if (String(r.status).includes('NEEDS_PRIVILEGE')) {
+  if (r.status === ResultStatus.NEEDS_PRIVILEGE) {
     await showPrivilegeDialog(n, label, r)
-  } else if (String(r.status).includes('OK')) {
+  } else if (r.status === ResultStatus.OK) {
     ElMessage.success(`${n.hostname || n.id} · ${label}成功`)
   } else {
     ElMessage.warning(`${n.hostname || n.id} · ${label}：${r.message || '未成功'}`)
