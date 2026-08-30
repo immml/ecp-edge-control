@@ -77,6 +77,8 @@ func (e *Executor) Handle(cmd *ecpv1.Command) *ecpv1.CommandResult {
 			return e.vncStart(cmd)
 		case ecpv1.CommandType_COMMAND_TYPE_VNC_STOP:
 			return e.vncStop(cmd)
+		case ecpv1.CommandType_COMMAND_TYPE_AGENT_UPGRADE:
+			return e.agentUpgrade(cmd)
 		default:
 			return e.fail(cmd, "不支持的指令类型: "+cmd.GetType().String())
 		}

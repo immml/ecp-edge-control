@@ -56,15 +56,22 @@ type Handler struct {
 	dispatch *command.Dispatcher
 	grpc     *grpcserver.Server
 	log      func(string, ...any)
+	// OTA：二进制存放目录、通告 IP、HTTPS 端口
+	dataDir     string
+	advertiseIP string
+	httpsPort   string
 }
 
 // New 构造 gin 引擎。
-func New(st *store.Store, sessions *session.Manager, dispatch *command.Dispatcher, gs *grpcserver.Server, log func(string, ...any)) *gin.Engine {
-	h := &Handler{store: st, sessions: sessions, dispatch: dispatch, grpc: gs, log: log}
+func New(st *store.Store, sessions *session.Manager, dispatch *command.Dispatcher, gs *grpcserver.Server, log func(string, ...any), dataDir, advertiseIP, httpsPort string) *gin.Engine {
+	h := &Handler{store: st, sessions: sessions, dispatch: dispatch, grpc: gs, log: log, dataDir: dataDir, advertiseIP: advertiseIP, httpsPort: httpsPort}
 	r := gin.New()
 	r.Use(gin.Recovery())
 
 	r.POST("/api/v1/login", h.Login)
+	// OTA：二进制上传/下载（下载免鉴权，仅内网静态文件）
+	r.POST("/api/v1/agent/upload", h.UploadBinary)
+	r.GET("/api/v1/agent/binaries/:name", h.ServeBinary)
 	// WebSocket 无法携带 Authorization header，终端/VNC 走 query token 自校验
 	r.GET("/api/v1/nodes/:id/terminal/ws", h.TerminalWS)
 	r.GET("/api/v1/nodes/:id/vnc/ws", h.VncWS)
@@ -83,6 +90,7 @@ func New(st *store.Store, sessions *session.Manager, dispatch *command.Dispatche
 		api.GET("/audit", h.ListAudit)
 		api.POST("/nodes/:id/command", h.RequireRole(model.RoleOperator), h.ExecCommand)
 		api.POST("/nodes/batch/command", h.RequireRole(model.RoleOperator), h.BatchCommand)
+		api.POST("/nodes/:id/upgrade", h.RequireRole(model.RoleOperator), h.UpgradeAgent)
 	}
 	return r
 }

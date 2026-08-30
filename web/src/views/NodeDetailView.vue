@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { api, type TelemetrySample } from '@/api/client'
 import { mockNodes } from '@/mock/nodes'
@@ -15,6 +15,45 @@ const loading = ref(true)
 const node = ref<any>(null)
 const online = ref(false)
 const history = ref<TelemetrySample[]>([]) // 升序（旧→新）
+
+// OTA 升级
+const upgradeVisible = ref(false)
+const upgradeFile = ref<File | null>(null)
+const upgrading = ref(false)
+
+function openUpgrade() {
+  upgradeFile.value = null
+  upgradeVisible.value = true
+}
+
+async function doUpgrade() {
+  if (!upgradeFile.value) return
+  upgrading.value = true
+  try {
+    const up = await api.uploadAgent(upgradeFile.value)
+    const res = await api.upgradeNode(nodeId, up.name)
+    upgradeVisible.value = false
+    if (res.needs_privilege) {
+      const script = res.privilege_script || ''
+      await ElMessageBox.confirm(
+        `<div style="font-size:13px;line-height:1.7">
+           <p style="margin:0 0 8px">Agent 升级需要 root 权限，请在节点执行：</p>
+           <pre style="background:var(--el-fill-color-light);padding:10px;border-radius:6px;overflow:auto;font-size:12px;white-space:pre-wrap">${script.replace(/</g, '&lt;')}</pre>
+         </div>`,
+        '升级需要提权',
+        { dangerouslyUseHTMLString: true, confirmButtonText: '我已执行', cancelButtonText: '关闭', showClose: false },
+      ).catch(() => null)
+    } else {
+      ElMessage.success(`升级已下发（SHA256 ${up.sha256.slice(0, 12)}…），节点将自动重启，稍候刷新页面验证`)
+    }
+    await new Promise((r) => setTimeout(r, 4000))
+    await load()
+  } catch (e: any) {
+    ElMessage.error(`升级失败：${e?.message || ''}`)
+  } finally {
+    upgrading.value = false
+  }
+}
 
 async function load() {
   try {
@@ -102,8 +141,28 @@ function openPanel() {
       <el-button size="small" :disabled="!online" @click="router.push(`/nodes/${nodeId}/terminal`)">终端</el-button>
       <el-button size="small" :disabled="!online" @click="router.push(`/nodes/${nodeId}/files`)">文件</el-button>
       <el-button size="small" :disabled="!node.tailscale_ip" @click="openPanel">1Panel</el-button>
+      <el-button size="small" :icon="'Upload'" :loading="upgrading" @click="openUpgrade">升级</el-button>
       <el-button size="small" :icon="'Refresh'" :loading="loading" @click="load">刷新</el-button>
     </div>
+
+    <!-- OTA 升级弹窗 -->
+    <el-dialog v-model="upgradeVisible" title="升级 Agent（OTA）" width="560px" :close-on-click-modal="false">
+      <el-alert type="info" :closable="false" show-icon style="margin-bottom: 12px"
+        title="流程" description="① 上传新的 Agent 二进制（arm64/amd64 按节点架构）→ ② 下发升级 → 节点下载校验 SHA256 后原子替换并重启。升级期间节点会短暂断连，几秒后自动恢复。" />
+      <el-upload
+        :auto-upload="false" :show-file-list="true" :limit="1"
+        accept="*/*" drag
+        :on-change="(f: any) => { if (f?.raw) upgradeFile = f.raw as File }"
+        :on-remove="() => { upgradeFile = null }"
+        style="margin-bottom: 12px"
+      >
+        <div style="font-size: 13px; padding: 8px 0">拖入或点击选择 Agent 二进制文件</div>
+      </el-upload>
+      <template #footer>
+        <el-button @click="upgradeVisible = false">取消</el-button>
+        <el-button type="primary" :loading="upgrading" :disabled="!upgradeFile" @click="doUpgrade">上传并升级</el-button>
+      </template>
+    </el-dialog>
 
     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px">
       <div class="card">

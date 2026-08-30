@@ -15,8 +15,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"syscall"
 	"time"
 
@@ -138,7 +140,30 @@ func main() {
 
 	// REST + 控制台 HTTPS
 	disp := command.New(grpcSrv.Sessions(), st, log.Info)
-	engine := api.New(st, grpcSrv.Sessions(), disp, grpcSrv, log.Info)
+	// OTA 通告地址：优先 advertise.endpoints[0]（如 "100.68.202.101:7443"）取 IP；
+	// 为空时自动探测本机 Tailscale IPv4（tailscale status），保证 OTA 下载 URL 节点可达
+	advIP := ""
+	if len(cfg.Advertise.Endpoints) > 0 {
+		if host, _, err := net.SplitHostPort(cfg.Advertise.Endpoints[0]); err == nil {
+			advIP = host
+		}
+	}
+	if advIP == "" {
+		if out, err := exec.Command("tailscale", "status").Output(); err == nil {
+			re := regexp.MustCompile(`(\d+\.\d+\.\d+\.\d+)\s+\S+\s+\S+\s+windows`)
+			if m := re.FindSubmatch(out); len(m) > 1 {
+				advIP = string(m[1])
+			}
+		}
+	}
+	if advIP == "" {
+		log.Warn("未探测到控制面 Tailscale IP，OTA 下载地址可能不可达；请在配置中设置 advertise.endpoints")
+	}
+	httpsPort := "8443"
+	if _, port, err := net.SplitHostPort(cfg.Server.Listen); err == nil && port != "" {
+		httpsPort = port
+	}
+	engine := api.New(st, grpcSrv.Sessions(), disp, grpcSrv, log.Info, cfg.Server.DataDir, advIP, httpsPort)
 	engine.NoRoute(func(c *gin.Context) {
 		p := c.Request.URL.Path
 		ext := filepath.Ext(p)

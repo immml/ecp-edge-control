@@ -221,6 +221,24 @@ class ApiClient {
     return this.request('POST', 'api/v1/nodes/batch/command', { node_ids: nodeIds, type, params })
   }
 
+  // —— OTA ——
+  async uploadAgent(file: File): Promise<{ name: string; sha256: string; size: number }> {
+    const fd = new FormData()
+    fd.append('file', file)
+    const resp = await fetch(this.base + 'api/v1/agent/upload', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${this.token}` },
+      body: fd,
+    })
+    const data = await resp.json()
+    if (!resp.ok || data.code !== 0) throw new Error(data.message || '上传失败')
+    return data.data
+  }
+
+  async upgradeNode(nodeId: string, binary: string): Promise<{ upgrading: boolean; needs_privilege?: boolean; privilege_script?: string }> {
+    return this.request('POST', `api/v1/nodes/${nodeId}/upgrade`, { binary })
+  }
+
   logout() {
     this.setToken(null)
   }
