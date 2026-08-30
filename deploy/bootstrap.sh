@@ -21,6 +21,8 @@
 #   --agent-url <url>         Agent 二进制下载地址（二选一，url 优先）
 #   --agent-file <path>       本地已有 Agent 二进制路径（二选一）
 #   --agent-sha256 <hex>      二进制 SHA256 校验（可选，给则校验）
+#   --ca-url <url>            控制面 CA 证书地址（默认自动探测 server 的 IP:8443）
+#   --https-port <port>       控制面 HTTPS 端口（默认 8443）
 #   --tailscale-authkey <key> Tailscale 接入 authkey（可选；缺则交互式登录）
 #   --no-1panel               跳过 1Panel 安装
 #   --relay-url <url>         紧急通道 Worker 地址（可选，如 wss://relay.example.com/agent）
@@ -45,6 +47,7 @@ fail()  { err "$*"; exit 1; }
 # ---------- 默认值 ----------
 SERVER=""; REG_KEY=""; AGENT_URL=""; AGENT_FILE=""; AGENT_SHA256=""
 TS_AUTHKEY=""; WITH_1PANEL=1; RELAY_URL=""; RELAY_TOKEN=""; FEISHU_WEBHOOK=""
+CA_URL=""; HTTPS_PORT=8443
 FORCE=0; DRY_RUN=0
 PREFIX=/opt/ecp-agent          # agent 数据目录（测试可改 /tmp/ecp-test）
 CFG_DIR=/etc/ecp               # 配置目录（测试可改 /tmp/ecp-test-cfg）
@@ -58,6 +61,8 @@ while [[ $# -gt 0 ]]; do
     --agent-url)          AGENT_URL=$2; shift 2 ;;
     --agent-file)         AGENT_FILE=$2; shift 2 ;;
     --agent-sha256)       AGENT_SHA256=$2; shift 2 ;;
+    --ca-url)             CA_URL=$2; shift 2 ;;
+    --https-port)         HTTPS_PORT=$2; shift 2 ;;
     --tailscale-authkey)  TS_AUTHKEY=$2; shift 2 ;;
     --no-1panel)          WITH_1PANEL=0; shift ;;
     --relay-url)          RELAY_URL=$2; shift 2 ;;
@@ -231,6 +236,17 @@ install_agent() {
   fi
   chown -R "$RUN_USER":"$RUN_USER" "$PREFIX"
 
+  # 4.3.5 自动拉取控制面 CA（新节点无凭据接入必需：没有 CA 节点 TLS 握手失败）
+  if [[ ! -s "$CFG_DIR/ca.crt" ]]; then
+    if fetch_ca "$CFG_DIR/ca.crt"; then
+      ok "已从控制面拉取 CA 证书"
+    else
+      warn "未能自动获取 CA 证书；请手动放置控制面 ca.crt 到 $CFG_DIR/ca.crt（见文档）"
+    fi
+  else
+    ok "CA 证书已存在，跳过拉取"
+  fi
+
   # 4.4 注册密钥（agent 以专用用户读写 /etc/ecp：首启会在此生成 client.key/client.crt，
   # 目录与文件必须归运行用户，否则身份加载 Permission denied）
   printf '%s\n' "$REG_KEY" > "$CFG_DIR/registration.key"
@@ -324,6 +340,34 @@ YAML
   # 4.8 接入验证
   sleep 6
   verify_agent_connected
+}
+
+# fetch_ca 从控制面自动拉取自签根证书。
+# 优先 --ca-url；否则用 --server 的 IP + HTTPS_PORT 探测 /api/v1/ca.crt。
+# 校验内容为 PEM 证书（防止拉到错误页面）；返回 0=成功 1=失败。
+fetch_ca() {
+  local out=$1 tmp
+  tmp="$out.new"
+  if [[ -n "$CA_URL" ]]; then
+    if curl -kfsSL --max-time 12 "$CA_URL" -o "$tmp" 2>/dev/null \
+      && grep -q "BEGIN CERTIFICATE" "$tmp"; then
+      mv "$tmp" "$out"; chmod 0644 "$out"; return 0
+    fi
+    warn "CA URL 拉取失败: $CA_URL"
+    rm -f "$tmp"; return 1
+  fi
+  local ip
+  ip=${SERVER%:*}
+  for port in "$HTTPS_PORT" 8443; do
+    if curl -kfsSL --max-time 10 "https://${ip}:${port}/api/v1/ca.crt" -o "$tmp" 2>/dev/null \
+      && grep -q "BEGIN CERTIFICATE" "$tmp"; then
+      mv "$tmp" "$out"; chmod 0644 "$out"
+      ok "拉取路径: https://${ip}:${port}/api/v1/ca.crt"
+      return 0
+    fi
+  done
+  rm -f "$tmp"
+  return 1
 }
 
 verify_agent_connected() {

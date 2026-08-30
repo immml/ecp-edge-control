@@ -72,6 +72,8 @@ func New(st *store.Store, sessions *session.Manager, dispatch *command.Dispatche
 	// OTA：二进制上传/下载（下载免鉴权，仅内网静态文件）
 	r.POST("/api/v1/agent/upload", h.UploadBinary)
 	r.GET("/api/v1/agent/binaries/:name", h.ServeBinary)
+	// 免鉴权 CA 分发（新节点首次接入需无凭据获取根证书）
+	r.GET("/api/v1/ca.crt", h.ServeCA)
 	// WebSocket 无法携带 Authorization header，终端/VNC 走 query token 自校验
 	r.GET("/api/v1/nodes/:id/terminal/ws", h.TerminalWS)
 	r.GET("/api/v1/nodes/:id/vnc/ws", h.VncWS)
