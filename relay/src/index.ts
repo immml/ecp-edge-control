@@ -67,10 +67,16 @@ export default {
       return json({ status: 'error', message: '鉴权失败' }, 401)
     }
 
-    // 路由到房间：message 处理在 Room 内完成
+    // 路由到房间：克隆请求并追加角色头，保留原始 Upgrade/Connection 等头
     const id = env.ROOMS.idFromName(nodeId)
     const room = env.ROOMS.get(id)
-    return room.fetch(request, { headers: { 'X-Ecp-Role': role } })
+    const upstream = new Request(request, {
+      headers: new Headers([
+        ...request.headers.entries(),
+        ['X-Ecp-Role', role],
+      ]),
+    })
+    return room.fetch(upstream)
   },
 }
 
@@ -90,3 +96,6 @@ function json(data: unknown, status = 200): Response {
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
   })
 }
+
+// Durable Object 必须在入口文件导出，wrangler 才能识别（否则打包时找不到类）
+export { Room } from './room'

@@ -51,6 +51,8 @@ id_rsa*
 id_ed25519*
 id_ecdsa*
 *.token
+.tokens.local
+.wrangler/
 
 # ---------- 环境变量与本地配置 ----------
 .env
