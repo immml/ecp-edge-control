@@ -1,0 +1,19 @@
+# ECP 控制面（云服务器完整版）配置
+server:
+  listen: "0.0.0.0:8443"        # HTTPS：控制台 + REST（公网直面，JWT 鉴权）
+  grpc_listen: "0.0.0.0:7443"   # gRPC：节点长连接（mTLS + 注册密钥）
+  data_dir: /opt/ecp-server/data
+
+tls:
+  # selfsigned：内置 CA 自签（访问端首次需信任；后续可换 tailscale/custom 真证书）
+  mode: selfsigned
+
+store:
+  driver: sqlite
+
+advertise:
+  endpoints:
+    - "38.76.180.246:7443"      # OTA 通告 / 节点下载地址（公网）
+
+discovery:
+  enabled: false
