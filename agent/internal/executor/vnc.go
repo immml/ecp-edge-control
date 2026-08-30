@@ -80,7 +80,10 @@ func (e *Executor) vncStart(cmd *ecpv1.Command) *ecpv1.CommandResult {
 	}
 	sudoPwd := getString(cmd.GetParams(), "sudo_password")
 	setup := "mkdir -p /root/.vnc && echo '" + password + "' | vncpasswd -f > /root/.vnc/passwd && chmod 600 /root/.vnc/passwd"
-	startCmd := "pkill -x Xvnc 2>/dev/null; sleep 1; vncserver -geometry " + geometry + " -alwaysshared"
+	// 杀旧 VNC 进程再启动：TigerVNC 的进程名可能是 Xvnc 或 Xtightvnc（不同发行版不同），
+	// 必须两个都杀——否则旧进程带着内存中的旧密码继续占端口，新设置的密码不生效。
+	// 这是 27a06e4 的教训：Xvnc 启动时把 passwd 载入内存，改文件不影响已运行进程。
+	startCmd := "pkill -x Xtightvnc 2>/dev/null; pkill -x Xvnc 2>/dev/null; sleep 1; vncserver -geometry " + geometry + " -alwaysshared"
 
 	// 1) 免密 sudo：直接全自动
 	if sudoOK() {
@@ -137,14 +140,15 @@ echo "VNC 已启动，端口 5900"`
 	return r
 }
 
-// vncStop 停止 VNC server（vncserver -kill :1）。
+// vncStop 停止 VNC server（先规范 kill，再兜底杀进程）。
 func (e *Executor) vncStop(cmd *ecpv1.Command) *ecpv1.CommandResult {
 	timeout := dur(cmd.GetTimeoutSec(), 20)
 	display := getString(cmd.GetParams(), "display")
 	if display == "" {
 		display = ":1"
 	}
-	script := "vncserver -kill " + display + " 2>/dev/null || true"
+	// vncserver -kill 依赖 pid 文件；进程名是 Xtightvnc 时也要兜底杀进程
+	script := "vncserver -kill " + display + " 2>/dev/null; pkill -x Xtightvnc 2>/dev/null; pkill -x Xvnc 2>/dev/null; true"
 	if sudoOK() {
 		out, err := runBin(timeout, "sudo", "bash", "-c", script)
 		r := e.base(cmd)
