@@ -45,12 +45,12 @@ func (e *Executor) vncStatus(cmd *ecpv1.Command) *ecpv1.CommandResult {
 		st["running"] = true
 		st["port"] = port
 	}
-	// 密码（root 或普通用户目录，vncserver 以 root 跑时在 /root/.vnc）
+	// 密码（vncserver 以 root 跑 → /root/.vnc/passwd；免密 sudo 可用时能读到）
 	if out, err := runBin(timeout, "sh", "-c",
-		"ls /root/.vnc/passwd $HOME/.vnc/passwd >/dev/null 2>&1 && echo 1 || echo 0"); err == nil && strings.TrimSpace(string(out)) == "1" {
+		"sudo -n ls /root/.vnc/passwd >/dev/null 2>&1 && echo 1 || (ls $HOME/.vnc/passwd >/dev/null 2>&1 && echo 1 || echo 0)"); err == nil && strings.TrimSpace(string(out)) == "1" {
 		st["password"] = true
 	} else {
-		st["hint"] = "VNC 密码未设置（平台会自动设为 orangepi）"
+		st["hint"] = "VNC 密码未设置（启动时平台会要求设置）"
 	}
 	data, _ := json.Marshal(st)
 	r := e.base(cmd)
@@ -80,7 +80,7 @@ func (e *Executor) vncStart(cmd *ecpv1.Command) *ecpv1.CommandResult {
 	}
 	sudoPwd := getString(cmd.GetParams(), "sudo_password")
 	setup := "mkdir -p /root/.vnc && echo '" + password + "' | vncpasswd -f > /root/.vnc/passwd && chmod 600 /root/.vnc/passwd"
-	startCmd := "vncserver -geometry " + geometry + " -alwaysshared"
+	startCmd := "pkill -x Xvnc 2>/dev/null; sleep 1; vncserver -geometry " + geometry + " -alwaysshared"
 
 	// 1) 免密 sudo：直接全自动
 	if sudoOK() {

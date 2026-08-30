@@ -40,7 +40,12 @@ async function startVnc() {
     {
       inputType: 'password',
       inputPlaceholder: '输入密码（4-8 位）',
-      inputValidator: (v: string) => (v && v.trim().length >= 4 && v.trim().length <= 8 ? true : '密码 4-8 位'),
+      inputValidator: (v: string) => {
+        const pwd = v || ''
+        if (pwd.trim().length < 4 || pwd.length > 8) return '密码 4-8 位'
+        if (!/^[A-Za-z0-9!@#$%^&*._-]+$/.test(pwd)) return '仅限字母数字和 !@#$%^&*._-'
+        return true
+      },
       confirmButtonText: '设置并启动',
     },
   ).catch(() => null)
@@ -134,7 +139,8 @@ function connect() {
   // VNC 服务端可能监听在 5900/5901...（按 vnc_status 探测的实际端口）
   const port = vncStatus.value?.port || 5900
   const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/v1/nodes/${nodeId}/vnc/ws?token=${encodeURIComponent(api.token || '')}&port=${port}`
-  rfb = new RFB(container.value, wsUrl, { credentials: { password: '' } })
+  // 直接带上用户设置/输入的密码，避免 noVNC 弹框输错
+  rfb = new RFB(container.value, wsUrl, { credentials: { password: vncPassword } })
   rfb.scaleViewport = true
   rfb.resizeSession = false
   rfb.addEventListener('connect', () => {
@@ -147,15 +153,18 @@ function connect() {
     connecting.value = false
   })
   rfb.addEventListener('credentialsrequired', () => {
+    // 兜底：vncPassword 为空（VNC 已在跑、本次会话未设置）时询问
     ElMessageBox.prompt('请输入 VNC 密码', 'VNC 认证', {
       inputType: 'password',
       confirmButtonText: '连接',
     }).then(({ value }) => {
+      vncPassword = value
       rfb?.sendCredentials({ password: value })
     }).catch(() => {})
   })
   rfb.addEventListener('securityfailure', (e: any) => {
-    ElMessage.error(`VNC 认证失败：${e?.detail?.reason || ''}`)
+    connecting.value = false
+    ElMessage.error(`VNC 认证失败：${e?.detail?.reason || ''}。若密码不确定，请先点「停止」再重新「启动」设置新密码。`)
   })
 }
 
