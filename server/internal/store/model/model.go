@@ -123,6 +123,17 @@ type AlertRule struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// AlertEvent 是一条告警事件（Agent 通过 NodeEvent 上报）。
+type AlertEvent struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	NodeID    string    `gorm:"size:64;index" json:"node_id"`
+	Kind      string    `gorm:"size:32;index" json:"kind"` // alert_fired / node_offline ...
+	Rule      string    `gorm:"size:128" json:"rule"`
+	Message   string    `gorm:"type:text" json:"message"`
+	Read      bool      `gorm:"default:false" json:"read"`
+	CreatedAt time.Time `gorm:"index" json:"created_at"`
+}
+
 // Command 是指令台账。
 type Command struct {
 	TraceID         string     `gorm:"primaryKey;size:64" json:"trace_id"`
@@ -203,6 +214,7 @@ func All() []any {
 		&AuditLog{},
 		&ConfigVersion{},
 		&AlertRule{},
+		&AlertEvent{},
 		&Command{},
 		&PanelTarget{},
 		&NodeAddress{},

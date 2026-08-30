@@ -21,6 +21,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	ecpv1 "ecp.dev/ecp/proto/gen/ecp/v1"
 	"ecp.dev/ecp/agent/internal/alert"
@@ -151,6 +152,11 @@ func (t *Transport) streamLoop(ctx context.Context, conn *grpc.ClientConn, id *r
 	stream, err := client.CommandStream(ctx)
 	if err != nil {
 		return err
+	}
+
+	// 绑定当前流：告警事件通过它上报（流重连后自动换绑）
+	t.alertEngine.OnEvent = func(kind, message string) {
+		t.sendEvent(stream, id.NodeID, kind, message)
 	}
 
 	// 首帧：心跳 + 能力上报
@@ -360,6 +366,20 @@ func (t *Transport) sendHeartbeat(stream ecpv1.AgentService_CommandStreamClient,
 	return stream.Send(&ecpv1.AgentMessage{
 		NodeId:  nodeID,
 		Payload: &ecpv1.AgentMessage_Heartbeat{Heartbeat: hb},
+	})
+}
+
+// sendEvent 向控制面上报一条节点事件（告警触发等），流不可用时静默丢弃。
+func (t *Transport) sendEvent(stream ecpv1.AgentService_CommandStreamClient, nodeID, kind, message string) {
+	_ = stream.Send(&ecpv1.AgentMessage{
+		NodeId: nodeID,
+		Payload: &ecpv1.AgentMessage_Event{
+			Event: &ecpv1.NodeEvent{
+				Ts:      timestamppb.Now(),
+				Kind:    kind,
+				Message: message,
+			},
+		},
 	})
 }
 

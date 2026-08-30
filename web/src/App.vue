@@ -7,6 +7,7 @@ const route = useRoute()
 const navItems = [
   { path: '/nodes', title: '节点', icon: 'Monitor' },
   { path: '/network', title: '组网', icon: 'Connection' },
+  { path: '/alerts', title: '告警', icon: 'Bell' },
   { path: '/audit', title: '审计日志', icon: 'Document' },
 ]
 
@@ -16,6 +17,7 @@ const activePath = computed(() => {
   // 详情页与终端页都应高亮"节点"
   if (p.startsWith('/nodes')) return '/nodes'
   if (p.startsWith('/network')) return '/network'
+  if (p.startsWith('/alerts')) return '/alerts'
   if (p.startsWith('/audit')) return '/audit'
   return p
 })

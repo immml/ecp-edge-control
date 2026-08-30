@@ -48,6 +48,8 @@ type Engine struct {
 	lastFired  map[string]time.Time
 	missed     int
 	mu         sync.Mutex
+	// OnEvent 可选回调：告警触发时上报事件到控制面（kind=alert_fired）
+	OnEvent func(kind, message string)
 }
 
 // 离线判定：连续丢失多少个心跳周期后视为离线。
@@ -160,9 +162,12 @@ func (e *Engine) RecordHeartbeat(ok bool) {
 	}
 }
 
-// fire 触发一条告警：本地落地 + 飞书推送。
+// fire 触发一条告警：本地落地 + 上报控制面 + 飞书推送。
 func (e *Engine) fire(name, message string) {
 	_ = e.cache.AppendAlert(&cache.AlertRecord{Rule: name, Message: message})
+	if e.OnEvent != nil {
+		e.OnEvent("alert_fired", message)
+	}
 	if url := e.cfg.Alert.FeishuWebhook; url != "" {
 		if err := pushFeishu(url, message); err != nil {
 			e.log.Warn("飞书推送失败", "err", err)

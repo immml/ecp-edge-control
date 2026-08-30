@@ -368,3 +368,69 @@ func (s *Store) ListTelemetry(nodeID string, limit int) ([]model.TelemetrySample
 	}
 	return out, nil
 }
+
+// SaveAlertEvent 保存一条告警事件。
+func (s *Store) SaveAlertEvent(ev *model.AlertEvent) error {
+	return s.db.Create(ev).Error
+}
+
+// ListAlertEvents 查询告警事件（节点过滤 + 分页，按时间倒序）。
+func (s *Store) ListAlertEvents(nodeID string, limit, offset int) ([]model.AlertEvent, int64, error) {
+	q := s.db.Model(&model.AlertEvent{})
+	if nodeID != "" {
+		q = q.Where("node_id = ?", nodeID)
+	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	var out []model.AlertEvent
+	if err := q.Order("created_at desc").Limit(limit).Offset(offset).Find(&out).Error; err != nil {
+		return nil, 0, err
+	}
+	return out, total, nil
+}
+
+// ListAlertRules 返回全部告警规则（可按节点过滤）。
+func (s *Store) ListAlertRules(nodeID string) ([]model.AlertRule, error) {
+	q := s.db.Model(&model.AlertRule{})
+	if nodeID != "" {
+		q = q.Where("node_id = ?", nodeID)
+	}
+	var out []model.AlertRule
+	if err := q.Order("id asc").Find(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SaveAlertRule 新建/更新告警规则。
+func (s *Store) SaveAlertRule(r *model.AlertRule) error {
+	return s.db.Save(r).Error
+}
+
+// GetAlertRule 按 ID 取规则。
+func (s *Store) GetAlertRule(id uint) (*model.AlertRule, error) {
+	var r model.AlertRule
+	if err := s.db.First(&r, id).Error; err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// DeleteAlertRule 删除规则。
+func (s *Store) DeleteAlertRule(id uint) error {
+	return s.db.Delete(&model.AlertRule{}, id).Error
+}
+
+// MarkAlertEventsRead 将指定节点的事件标记为已读。
+func (s *Store) MarkAlertEventsRead(nodeID string) error {
+	q := s.db.Model(&model.AlertEvent{})
+	if nodeID != "" {
+		q = q.Where("node_id = ?", nodeID)
+	}
+	return q.Update("read", true).Error
+}

@@ -399,6 +399,22 @@ func (s *Server) handleAgentMessage(sess *session.Session, msg *ecpv1.AgentMessa
 		s.sessions.DeliverTerminal(p.TerminalData)
 	case *ecpv1.AgentMessage_Event:
 		s.log.Info("收到节点事件", "node_id", msg.NodeId, "kind", p.Event.Kind)
+		ev := &model.AlertEvent{
+			NodeID:  msg.NodeId,
+			Kind:    p.Event.Kind,
+			Message: p.Event.Message,
+		}
+		if p.Event.Data != nil {
+			if s, err := json.Marshal(p.Event.Data.AsMap()); err == nil {
+				ev.Rule = string(s)
+			}
+		}
+		if p.Event.Ts != nil {
+			ev.CreatedAt = p.Event.Ts.AsTime()
+		}
+		if err := s.store.SaveAlertEvent(ev); err != nil {
+			s.log.Warn("告警事件落库失败", "node_id", msg.NodeId, "err", err)
+		}
 	}
 }
 

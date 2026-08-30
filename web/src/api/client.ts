@@ -239,6 +239,29 @@ class ApiClient {
     return this.request('POST', `api/v1/nodes/${nodeId}/upgrade`, { binary })
   }
 
+  // —— 告警 ——
+  async listAlertRules(): Promise<{ rules: any[]; total: number }> {
+    return this.request('GET', 'api/v1/alerts/rules')
+  }
+  async createAlertRule(body: Record<string, unknown>): Promise<any> {
+    return this.request('POST', 'api/v1/alerts/rules', body)
+  }
+  async updateAlertRule(id: number, body: Record<string, unknown>): Promise<any> {
+    return this.request('PUT', `api/v1/alerts/rules/${id}`, body)
+  }
+  async deleteAlertRule(id: number): Promise<any> {
+    return this.request('DELETE', `api/v1/alerts/rules/${id}`)
+  }
+  async deployAlertRule(nodeId: string): Promise<{ deployed: boolean; count: number }> {
+    return this.request('POST', 'api/v1/alerts/rules/deploy', { node_id: nodeId })
+  }
+  async listAlertEvents(limit = 200): Promise<{ events: any[]; total: number }> {
+    return this.request('GET', `api/v1/alerts/events?limit=${limit}`)
+  }
+  async markAlertEventsRead(): Promise<any> {
+    return this.request('POST', 'api/v1/alerts/events/read')
+  }
+
   logout() {
     this.setToken(null)
   }
