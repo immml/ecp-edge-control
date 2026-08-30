@@ -140,11 +140,10 @@ func main() {
 		os.Exit(1)
 	}
 	grpcSrv := grpcserver.New(st, caInstance, cfg, log)
-	// 飞书群推送（带签名 Webhook）：告警事件聚合推送到群
+	// 飞书群推送（带签名 Webhook）：告警聚合推群；同规则 5 分钟节流防刷屏
 	if pushCfg := feishu.PushConfigFromEnv(); pushCfg.Enabled() {
-		grpcSrv.SetAlertNotifier(func(nodeID, kind, message string) {
-			feishu.NotifyWithLog(pushCfg, log, fmt.Sprintf("[节点告警] %s\n%s", nodeID, message))
-		})
+		notifier := feishu.NewThrottledNotifier(pushCfg, log, 5*time.Minute)
+		grpcSrv.SetAlertNotifier(notifier.Notify)
 		feishu.NotifyWithLog(pushCfg, log, "控制面已上线：ECP 边缘节点控制台")
 	}
 	go func() {

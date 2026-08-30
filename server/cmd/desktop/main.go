@@ -24,6 +24,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -47,6 +48,10 @@ import (
 var version = "dev"
 
 func main() {
+	// 高 DPI 适配：Windows 下声明 Per-Monitor V2 DPI aware，
+	// 避免 WebView2 窗口在高分屏（125%/150% 缩放）下字体模糊
+	enableDPIAwareness()
+
 	// 配置：桌面模式默认用同目录下的 desktop.yaml / 环境变量 ECP_CONFIG，
 	// 缺失则纯默认（server.Listen 会被覆盖为回环随机端口）。
 	cfgPath := os.Getenv("ECP_CONFIG")
@@ -109,9 +114,8 @@ func main() {
 	grpcSrv := grpcserver.New(st, caInstance, cfg, log)
 	// 飞书群推送（带签名 Webhook）：告警事件聚合推送到群
 	if pushCfg := feishu.PushConfigFromEnv(); pushCfg.Enabled() {
-		grpcSrv.SetAlertNotifier(func(nodeID, kind, message string) {
-			feishu.NotifyWithLog(pushCfg, log, fmt.Sprintf("[节点告警] %s\n%s", nodeID, message))
-		})
+		notifier := feishu.NewThrottledNotifier(pushCfg, log, 5*time.Minute)
+		grpcSrv.SetAlertNotifier(notifier.Notify)
 		feishu.NotifyWithLog(pushCfg, log, "控制面已上线：ECP 边缘节点控制台")
 	}
 	go func() {
@@ -303,5 +307,24 @@ func loadEnvFile(dataDir string) {
 				_ = os.Setenv(k, v)
 			}
 		}
+	}
+}
+
+// enableDPIAwareness 声明进程为 Per-Monitor V2 DPI aware（仅 Windows）。
+// 系统缩放（125%/150%）下若不声明，WebView2 会被位图拉伸导致界面模糊。
+func enableDPIAwareness() {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	dll := syscall.NewLazyDLL("user32.dll")
+	proc := dll.NewProc("SetProcessDpiAwarenessContext")
+	if proc.Find() != nil {
+		return // 旧系统无此 API，保持默认
+	}
+	// DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+	r1, _, _ := proc.Call(uintptr(0xFFFFFFFC))
+	if r1 == 0 {
+		// 失败（如已有进程级设置）无碍：仅降级为系统缩放
+		_, _, _ = syscall.NewLazyDLL("user32.dll").NewProc("SetProcessDPIAware").Call()
 	}
 }
