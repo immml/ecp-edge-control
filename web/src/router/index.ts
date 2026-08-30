@@ -29,9 +29,7 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/nodes/:id/network',
-    name: 'node-network',
-    component: () => import('@/views/NodeNetworkView.vue'),
-    meta: { title: '网络管理', hidden: true },
+    redirect: (to) => `/nodes/${to.params.id}?tab=network`,
   },
   {
     path: '/nodes/:id/files',

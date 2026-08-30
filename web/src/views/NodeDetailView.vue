@@ -6,6 +6,9 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, type TelemetrySample } from '@/api/client'
 import { mockNodes } from '@/mock/nodes'
 import { formatBytes, percent, timeAgo } from '@/utils/format'
+import NetworkPanel from '@/components/NetworkPanel.vue'
+import NodeMeshPanel from '@/components/NodeMeshPanel.vue'
+import NodeVpnPanel from '@/components/NodeVpnPanel.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -15,6 +18,7 @@ const loading = ref(true)
 const node = ref<any>(null)
 const online = ref(false)
 const history = ref<TelemetrySample[]>([]) // 升序（旧→新）
+const detailTab = ref('overview') // overview / net / mesh / vpn
 
 // OTA 升级
 const upgradeVisible = ref(false)
@@ -77,6 +81,11 @@ async function load() {
 }
 
 onMounted(() => {
+  // 兼容旧链接 /nodes/:id/network 重定向之后自动切到网络管理 Tab
+  const t = route.query.tab
+  if (t === 'network' || t === 'net') detailTab.value = 'net'
+  if (t === 'mesh') detailTab.value = 'mesh'
+  if (t === 'vpn') detailTab.value = 'vpn'
   load()
   timer = window.setInterval(load, 15000)
 })
@@ -140,7 +149,7 @@ function openPanel() {
       <el-button size="small" :disabled="!online" @click="router.push(`/nodes/${nodeId}/vnc`)">VNC</el-button>
       <el-button size="small" :disabled="!online" @click="router.push(`/nodes/${nodeId}/terminal`)">终端</el-button>
       <el-button size="small" :disabled="!online" @click="router.push(`/nodes/${nodeId}/files`)">文件</el-button>
-      <el-button size="small" :disabled="!online" @click="router.push(`/nodes/${nodeId}/network`)">网络</el-button>
+      <el-button size="small" :disabled="!node.tailscale_ip" @click="openPanel">1Panel</el-button>
       <el-button size="small" :disabled="!node.tailscale_ip" @click="openPanel">1Panel</el-button>
       <el-button size="small" :icon="'Upload'" :loading="upgrading" @click="openUpgrade">升级</el-button>
       <el-button size="small" :icon="'Refresh'" :loading="loading" @click="load">刷新</el-button>
@@ -165,107 +174,127 @@ function openPanel() {
       </template>
     </el-dialog>
 
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px">
-      <div class="card">
-        <div class="card-header">系统信息</div>
-        <div class="card-body">
-          <el-descriptions :column="1" size="small" border>
-            <el-descriptions-item label="主机名">{{ node.hostname || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="节点 ID">
-              <span class="mono">{{ node.id }}</span>
-            </el-descriptions-item>
-            <el-descriptions-item label="架构">{{ node.arch }}</el-descriptions-item>
-            <el-descriptions-item label="系统">{{ node.os }}</el-descriptions-item>
-            <el-descriptions-item label="Agent 版本">{{ node.agent_version }}</el-descriptions-item>
-            <el-descriptions-item label="最后在线">{{ timeAgo(node.last_seen_at) }}</el-descriptions-item>
-          </el-descriptions>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-header">实时资源</div>
-        <div class="card-body">
-          <template v-if="latest">
-            <div class="metric">
-              <div class="metric-label">
-                <span>CPU</span>
-                <span class="metric-value">{{ latest.cpu_percent.toFixed(1) }}%</span>
-              </div>
-              <el-progress :percentage="Math.round(latest.cpu_percent)" :stroke-width="6" :show-text="false" />
+    <el-tabs v-model="detailTab" class="node-detail-tabs">
+      <!-- ============ 概览 ============ -->
+      <el-tab-pane label="概览" name="overview">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px">
+          <div class="card">
+            <div class="card-header">系统信息</div>
+            <div class="card-body">
+              <el-descriptions :column="1" size="small" border>
+                <el-descriptions-item label="主机名">{{ node.hostname || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="节点 ID">
+                  <span class="mono">{{ node.id }}</span>
+                </el-descriptions-item>
+                <el-descriptions-item label="架构">{{ node.arch }}</el-descriptions-item>
+                <el-descriptions-item label="系统">{{ node.os }}</el-descriptions-item>
+                <el-descriptions-item label="Agent 版本">{{ node.agent_version }}</el-descriptions-item>
+                <el-descriptions-item label="最后在线">{{ timeAgo(node.last_seen_at) }}</el-descriptions-item>
+              </el-descriptions>
             </div>
-            <div class="metric">
-              <div class="metric-label">
-                <span>内存</span>
-                <span class="metric-value">
-                  {{ formatBytes(latest.mem_used_bytes) }} / {{ formatBytes(latest.mem_total_bytes) }}
-                </span>
-              </div>
-              <el-progress :percentage="Math.round(memPct)" :stroke-width="6" :show-text="false" />
-            </div>
-            <div class="metric">
-              <div class="metric-label">
-                <span>磁盘</span>
-                <span class="metric-value">
-                  {{ formatBytes(latest.disk_used_bytes) }} / {{ formatBytes(latest.disk_total_bytes) }}
-                </span>
-              </div>
-              <el-progress :percentage="Math.round(diskPct)" :stroke-width="6" :show-text="false" />
-            </div>
-            <div style="display: flex; gap: 20px; margin-top: 14px; font-size: 12.5px">
-              <div>
-                <div class="text-secondary">负载 (1m)</div>
-                <div class="mono" style="font-size: 15px">{{ latest.load1?.toFixed?.(2) ?? latest.load1 }}</div>
-              </div>
-              <div>
-                <div class="text-secondary">温度</div>
-                <div class="mono" style="font-size: 15px">{{ latest.temperature_celsius?.toFixed?.(1) ?? latest.temperature_celsius }}°C</div>
-              </div>
-              <div>
-                <div class="text-secondary">容器</div>
-                <div class="mono" style="font-size: 15px">{{ latest.containers_running ?? 0 }}</div>
-              </div>
-            </div>
-          </template>
-          <el-empty v-else description="暂无遥测数据（节点上线后自动采集）" :image-size="60" />
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-header">
-        <span>遥测趋势</span>
-        <span class="text-secondary" style="font-weight: 400; font-size: 12px">
-          最近 {{ history.length }} 个采集点 · 15s 自动刷新
-        </span>
-      </div>
-      <div class="card-body" style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px">
-        <div v-for="(g, gi) in [
-          { label: 'CPU %', pts: cpuSeries.pts, max: cpuSeries.max, color: '#6b37c9' },
-          { label: '内存 %', pts: memSeries.pts, max: memSeries.max, color: '#409eff' },
-          { label: '磁盘 %', pts: diskSeries.pts, max: diskSeries.max, color: '#67c23a' },
-          { label: '温度 °C', pts: tempSeries.pts, max: tempSeries.max, color: '#e6a23c' },
-        ]" :key="gi">
-          <div class="text-secondary" style="font-size: 12.5px; margin-bottom: 4px">
-            {{ g.label }} <span class="mono">(max {{ g.max.toFixed(0) }})</span>
           </div>
-          <svg v-if="g.pts" viewBox="0 0 340 64" style="width: 100%; height: 64px; display: block">
-            <polyline :points="g.pts" fill="none" :stroke="g.color" stroke-width="2" stroke-linejoin="round" />
-            <circle
-              v-for="(pt, pi) in g.pts.split(' ')"
-              :key="pi"
-              :cx="pt.split(',')[0]"
-              :cy="pt.split(',')[1]"
-              r="1.6"
-              :fill="g.color"
-            />
-          </svg>
-          <el-empty v-else description="样本不足" :image-size="40" />
-          <div class="text-secondary mono" style="font-size: 11px">
-            {{ timeLabel(0) }} → {{ timeLabel(history.length - 1) }}
+
+          <div class="card">
+            <div class="card-header">实时资源</div>
+            <div class="card-body">
+              <template v-if="latest">
+                <div class="metric">
+                  <div class="metric-label">
+                    <span>CPU</span>
+                    <span class="metric-value">{{ latest.cpu_percent.toFixed(1) }}%</span>
+                  </div>
+                  <el-progress :percentage="Math.round(latest.cpu_percent)" :stroke-width="6" :show-text="false" />
+                </div>
+                <div class="metric">
+                  <div class="metric-label">
+                    <span>内存</span>
+                    <span class="metric-value">
+                      {{ formatBytes(latest.mem_used_bytes) }} / {{ formatBytes(latest.mem_total_bytes) }}
+                    </span>
+                  </div>
+                  <el-progress :percentage="Math.round(memPct)" :stroke-width="6" :show-text="false" />
+                </div>
+                <div class="metric">
+                  <div class="metric-label">
+                    <span>磁盘</span>
+                    <span class="metric-value">
+                      {{ formatBytes(latest.disk_used_bytes) }} / {{ formatBytes(latest.disk_total_bytes) }}
+                    </span>
+                  </div>
+                  <el-progress :percentage="Math.round(diskPct)" :stroke-width="6" :show-text="false" />
+                </div>
+                <div style="display: flex; gap: 20px; margin-top: 14px; font-size: 12.5px">
+                  <div>
+                    <div class="text-secondary">负载 (1m)</div>
+                    <div class="mono" style="font-size: 15px">{{ latest.load1?.toFixed?.(2) ?? latest.load1 }}</div>
+                  </div>
+                  <div>
+                    <div class="text-secondary">温度</div>
+                    <div class="mono" style="font-size: 15px">{{ latest.temperature_celsius?.toFixed?.(1) ?? latest.temperature_celsius }}°C</div>
+                  </div>
+                  <div>
+                    <div class="text-secondary">容器</div>
+                    <div class="mono" style="font-size: 15px">{{ latest.containers_running ?? 0 }}</div>
+                  </div>
+                </div>
+              </template>
+              <el-empty v-else description="暂无遥测数据（节点上线后自动采集）" :image-size="60" />
+            </div>
           </div>
         </div>
-      </div>
-    </div>
+
+        <div class="card" style="margin-top: 16px">
+          <div class="card-header">
+            <span>遥测趋势</span>
+            <span class="text-secondary" style="font-weight: 400; font-size: 12px">
+              最近 {{ history.length }} 个采集点 · 15s 自动刷新
+            </span>
+          </div>
+          <div class="card-body" style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px">
+            <div v-for="(g, gi) in [
+              { label: 'CPU %', pts: cpuSeries.pts, max: cpuSeries.max, color: '#6b37c9' },
+              { label: '内存 %', pts: memSeries.pts, max: memSeries.max, color: '#409eff' },
+              { label: '磁盘 %', pts: diskSeries.pts, max: diskSeries.max, color: '#67c23a' },
+              { label: '温度 °C', pts: tempSeries.pts, max: tempSeries.max, color: '#e6a23c' },
+            ]" :key="gi">
+              <div class="text-secondary" style="font-size: 12.5px; margin-bottom: 4px">
+                {{ g.label }} <span class="mono">(max {{ g.max.toFixed(0) }})</span>
+              </div>
+              <svg v-if="g.pts" viewBox="0 0 340 64" style="width: 100%; height: 64px; display: block">
+                <polyline :points="g.pts" fill="none" :stroke="g.color" stroke-width="2" stroke-linejoin="round" />
+                <circle
+                  v-for="(pt, pi) in g.pts.split(' ')"
+                  :key="pi"
+                  :cx="pt.split(',')[0]"
+                  :cy="pt.split(',')[1]"
+                  r="1.6"
+                  :fill="g.color"
+                />
+              </svg>
+              <el-empty v-else description="样本不足" :image-size="40" />
+              <div class="text-secondary mono" style="font-size: 11px">
+                {{ timeLabel(0) }} → {{ timeLabel(history.length - 1) }}
+              </div>
+            </div>
+          </div>
+        </div>
+      </el-tab-pane>
+
+      <!-- ============ 网络管理（本节点） ============ -->
+      <el-tab-pane label="网络管理" name="net">
+        <NetworkPanel v-if="node" :node="node" />
+      </el-tab-pane>
+
+      <!-- ============ 组网（本节点） ============ -->
+      <el-tab-pane label="组网" name="mesh">
+        <NodeMeshPanel v-if="node" :node="node" />
+      </el-tab-pane>
+
+      <!-- ============ VPN 跳板（本节点） ============ -->
+      <el-tab-pane label="VPN 跳板" name="vpn">
+        <NodeVpnPanel v-if="node" :node="node" />
+      </el-tab-pane>
+    </el-tabs>
   </div>
 
   <el-empty v-else description="节点不存在" />
