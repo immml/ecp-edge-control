@@ -28,6 +28,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '终端', hidden: true },
   },
   {
+    path: '/nodes/:id/network',
+    name: 'node-network',
+    component: () => import('@/views/NodeNetworkView.vue'),
+    meta: { title: '网络管理', hidden: true },
+  },
+  {
     path: '/nodes/:id/files',
     name: 'files',
     component: () => import('@/views/FilesView.vue'),

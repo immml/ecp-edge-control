@@ -267,8 +267,12 @@ class ApiClient {
   }
 
   // —— VPN / Clash ——
-  /** 导出 Clash 配置（访问内网设备）；返回 yaml 文本。 */
-  async exportClash(cfg: { name?: string; server: string; port?: number; uuid: string; path?: string; extra_ips?: string }): Promise<string> {
+  /** 导出 Clash 配置（访问内网设备）；返回 yaml 文本。支持多跳板：每节点一个 vmess proxy。 */
+  async exportClash(cfg: {
+    nodes?: { name?: string; server: string; port?: number; uuid: string; path?: string }[];
+    server?: string; port?: number; uuid?: string; path?: string; name?: string;
+    extra_ips?: string;
+  }): Promise<string> {
     const resp = await fetch(this.base + 'api/v1/vpn/clash-config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.token}` },

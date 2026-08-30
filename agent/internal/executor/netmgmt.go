@@ -84,12 +84,14 @@ func (e *Executor) netGet(cmd *ecpv1.Command) *ecpv1.CommandResult {
 		if bin == "" {
 			return e.fail(cmd, "未安装测速工具：将 speedtest-go 放到 agent 同目录或 /opt/ecp-agent/bin/ 下")
 		}
-		out, err := runBin(timeout, bin, "--json", "--saving-mode")
+		// 完整模式（不用 --saving-mode：省流量模式上传包小，结果偏差大，用户实测上传偏低）
+		out, err := runBin(timeout, bin, "--json")
 		if err != nil {
 			return e.fail(cmd, "测速失败: "+errString(err))
 		}
 		type srv struct {
 			Name    string  `json:"name"`
+			Country string  `json:"country"`
 			Latency float64 `json:"latency"`
 			Jitter  float64 `json:"jitter"`
 			DlSpeed float64 `json:"dl_speed"`
@@ -101,7 +103,13 @@ func (e *Executor) netGet(cmd *ecpv1.Command) *ecpv1.CommandResult {
 		if err := json.Unmarshal(stripJSONP(out), &res); err != nil || len(res.Servers) == 0 {
 			return e.textResult(cmd, "测速未返回有效数据:\n"+string(out))
 		}
+		// 选延迟最低的服务器（speedtest-go 默认可能给多个，首个不一定最优）
 		v := res.Servers[0]
+		for _, s := range res.Servers {
+			if s.Latency > 0 && s.Latency < v.Latency && s.DlSpeed > 0 {
+				v = s
+			}
+		}
 		lat, jit := v.Latency, v.Jitter
 		if lat > 1e6 {
 			lat /= 1e6 // ns → ms
@@ -109,11 +117,84 @@ func (e *Executor) netGet(cmd *ecpv1.Command) *ecpv1.CommandResult {
 		if jit > 1e6 {
 			jit /= 1e6
 		}
-		return e.textResult(cmd, fmt.Sprintf("节点 %s\n延迟 %.1f ms (jitter %.1f)\n下载 %.2f Mbps\n上传 %.2f Mbps",
-			v.Name, lat, jit, v.DlSpeed*8/1e6, v.UlSpeed*8/1e6))
+		region := v.Country
+		result := fmt.Sprintf("节点 %s (%s)\n延迟 %.1f ms (jitter %.1f)\n下载 %.2f Mbps\n上传 %.2f Mbps\n服务器数量 %d",
+			v.Name, region, lat, jit, v.DlSpeed*8/1e6, v.UlSpeed*8/1e6, len(res.Servers))
+		return e.textResult(cmd, result)
+	case "ip_quality":
+		// IP 质量体检：复用公开脚本 xykt/IPQuality（-j JSON，-4 仅 IPv4，-n 跳过依赖安装）。
+		// 首次运行自动下载脚本到 agent 同目录，需节点能访问 GitHub。
+		// 完整检测含 AI/邮局/DNSBL 多项，耗时 2-6 分钟，超时放宽。
+		const ipqURL = "https://raw.githubusercontent.com/xykt/IPQuality/main/ip.sh"
+		ipqPath := filepath.Join(agentDir(), "ipquality.sh")
+		if !pathExists(ipqPath) {
+			dl, derr := runBin(60*time.Second, "curl", "-fsSL", "--max-time", "50", "-o", ipqPath, ipqURL)
+			if derr != nil {
+				return e.fail(cmd, "下载 IPQuality 脚本失败（节点需可访问 GitHub）: "+errString(derr)+"\n"+string(dl))
+			}
+			runBin(5*time.Second, "chmod", "+x", ipqPath)
+		}
+		out, err := runBin(360*time.Second, "bash", ipqPath, "-j", "-4", "-n")
+		if err != nil {
+			return e.textResult(cmd, "IP 体检执行异常（需 dig/jq/curl/nc/bc 依赖）:\n"+errString(err)+"\n"+strings.TrimSpace(stripANSI(string(out))))
+		}
+		parsed := parseIPQualityJSON(stripJSONP([]byte(stripANSI(string(out)))))
+		if parsed == "" {
+			return e.textResult(cmd, "IP 体检完成（未解析出结构化数据）:\n"+stripANSI(string(out)))
+		}
+		return e.textResult(cmd, parsed)
 	default:
 		return e.fail(cmd, "未知 net_get action: "+action)
 	}
+}
+
+// agentDir 返回当前 agent 可执行文件所在目录。
+func agentDir() string {
+	if exe, err := os.Executable(); err == nil {
+		return filepath.Dir(exe)
+	}
+	return "."
+}
+
+// parseIPQualityJSON 把 IPQuality 的 -j JSON 输出压缩成易读文本。
+func parseIPQualityJSON(b []byte) string {
+	var d struct {
+		Info struct {
+			ASN          string `json:"ASN"`
+			Organization string `json:"Organization"`
+			Type         string `json:"Type"`
+		} `json:"Info"`
+		Score struct {
+			Scamalytics  string `json:"SCAMALYTICS"`
+			IP2LOCATION  string `json:"IP2LOCATION"`
+			AbuseIPDB    string `json:"AbuseIPDB"`
+			ScamalyticsV string `json:"SCAMALYTICS"`
+		} `json:"Score"`
+		Media struct {
+			TikTok     struct{ Status string `json:"Status"` } `json:"TikTok"`
+			Netflix    struct{ Status string `json:"Status"` } `json:"Netflix"`
+			DisneyPlus struct{ Status string `json:"Status"` } `json:"DisneyPlus"`
+			YouTube    struct{ Status string `json:"Status"` } `json:"Youtube"`
+			ChatGPT    struct{ Status string `json:"Status"` } `json:"ChatGPT"`
+		} `json:"Media"`
+	}
+	if err := json.Unmarshal(b, &d); err != nil {
+		return ""
+	}
+	media := ""
+	for _, kv := range [][2]string{
+		{"TikTok", d.Media.TikTok.Status},
+		{"Netflix", d.Media.Netflix.Status},
+		{"Disney+", d.Media.DisneyPlus.Status},
+		{"YouTube", d.Media.YouTube.Status},
+		{"ChatGPT", d.Media.ChatGPT.Status},
+	} {
+		if kv[1] != "" {
+			media += kv[0] + "=" + kv[1] + " "
+		}
+	}
+	return fmt.Sprintf("IP 质量\nASN: %s (%s)\n类型: %s\n风险分: %s\n流媒体: %s",
+		d.Info.Organization, d.Info.ASN, d.Info.Type, d.Score.Scamalytics, strings.TrimRight(media, " "))
 }
 
 // netSet 网络配置修改（提权敏感）。
@@ -321,6 +402,13 @@ func stripJSONP(b []byte) []byte {
 		return []byte(s[i:])
 	}
 	return b
+}
+
+// stripANSI 清除终端控制序列（进度条 \r、颜色 \x1b[...m、退格等）。
+var ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\r|[\x08\x1b]`)
+
+func stripANSI(s string) string {
+	return ansiRe.ReplaceAllString(s, "")
 }
 
 // findSpeedtestBin 在候选路径中找测速二进制（优先 agent 同级，随分发一起走）。

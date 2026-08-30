@@ -9,7 +9,7 @@ cmd = sys.argv[1]
 
 cli = paramiko.SSHClient()
 cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-cli.connect(host, port=22, username=user, password=pw, timeout=20, banner_timeout=20)
+cli.connect(host, port=22, username=user, password=pw, timeout=20, banner_timeout=20, allow_agent=False, look_for_keys=False)
 chan = cli.get_transport().open_session()
 chan.settimeout(120)
 chan.exec_command(cmd + "\n")

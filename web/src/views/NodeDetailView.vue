@@ -140,6 +140,7 @@ function openPanel() {
       <el-button size="small" :disabled="!online" @click="router.push(`/nodes/${nodeId}/vnc`)">VNC</el-button>
       <el-button size="small" :disabled="!online" @click="router.push(`/nodes/${nodeId}/terminal`)">终端</el-button>
       <el-button size="small" :disabled="!online" @click="router.push(`/nodes/${nodeId}/files`)">文件</el-button>
+      <el-button size="small" :disabled="!online" @click="router.push(`/nodes/${nodeId}/network`)">网络</el-button>
       <el-button size="small" :disabled="!node.tailscale_ip" @click="openPanel">1Panel</el-button>
       <el-button size="small" :icon="'Upload'" :loading="upgrading" @click="openUpgrade">升级</el-button>
       <el-button size="small" :icon="'Refresh'" :loading="loading" @click="load">刷新</el-button>

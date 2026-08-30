@@ -218,9 +218,21 @@ func main() {
 		Addr:    cfg.Server.Listen,
 		Handler: engine,
 	}
+	// 服务端证书 SAN：localhost + 本机回环 + 广告地址（公网/组网可达）。
+	// 关键：必须包含节点与浏览器访问控制面的真实地址，否则即使信任 CA，
+	// Chrome/Edge 也会因 CN/SAN 与 URL 地址不匹配而报"不安全"。
+	dnsNames := []string{"localhost", "ecp-control"}
+	ipAddrs := []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}
+	if advIP != "" {
+		if ip := net.ParseIP(advIP); ip != nil {
+			ipAddrs = append(ipAddrs, ip)
+		} else {
+			dnsNames = append(dnsNames, advIP) // 广告的是域名（如 tailscale 主机名）
+		}
+	}
 	if cert, key, err := caInstance.SignServerCert(
-		[]string{"localhost", "ecp-control"},
-		[]net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		dnsNames,
+		ipAddrs,
 		8760*time.Hour,
 	); err == nil {
 		if tlsCert, err := tls.X509KeyPair(cert, key); err == nil {
