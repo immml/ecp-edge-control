@@ -28,7 +28,5 @@ export default defineConfig({
     outDir: 'dist',
     sourcemap: false,
     chunkSizeWarningLimit: 1500,
-    // noVNC 使用 top-level await，需要 esnext 目标
-    target: 'esnext',
   },
 })

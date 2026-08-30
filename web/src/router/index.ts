@@ -40,12 +40,6 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '容器', hidden: true },
   },
   {
-    path: '/nodes/:id/vnc',
-    name: 'vnc',
-    component: () => import('@/views/VncView.vue'),
-    meta: { title: 'VNC', hidden: true },
-  },
-  {
     path: '/audit',
     name: 'audit',
     component: () => import('@/views/AuditView.vue'),

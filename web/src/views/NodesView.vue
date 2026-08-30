@@ -209,9 +209,6 @@ onMounted(load)
           <el-button size="small" :disabled="node.status !== 'online'" @click="router.push(`/nodes/${node.id}/containers`)">
             容器
           </el-button>
-          <el-button size="small" :disabled="node.status !== 'online'" @click="router.push(`/nodes/${node.id}/vnc`)">
-            VNC
-          </el-button>
           <el-button size="small" :disabled="node.status !== 'online'" @click="router.push(`/nodes/${node.id}/terminal`)">
             终端
           </el-button>
