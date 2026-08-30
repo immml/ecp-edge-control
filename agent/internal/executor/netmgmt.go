@@ -46,7 +46,33 @@ func (e *Executor) netGet(cmd *ecpv1.Command) *ecpv1.CommandResult {
 	timeout := dur(cmd.GetTimeoutSec(), 25)
 	switch action {
 	case "wifi_scan":
-		return e.netRun(cmd, timeout, "nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY,CHAN", "dev", "wifi", "list")
+		// 先触发 NM 主动扫描。注意：NetworkManager 默认禁止普通用户 rescan
+		// （org.freedesktop.NetworkManager.wifi.scan: not authorized），
+		// 有免密 sudo 时用 sudo 触发；否则尝试普通权限，失败不阻塞。
+		iface := getString(cmd.GetParams(), "iface")
+		if iface == "" {
+			iface = defaultWiFiIface()
+		}
+		if sudoOK() {
+			_, _ = runBin(10*time.Second, "sudo", "-n", "nmcli", "dev", "wifi", "rescan", "ifname", iface)
+		} else {
+			_, _ = runBin(10*time.Second, "nmcli", "dev", "wifi", "rescan", "ifname", iface)
+		}
+		time.Sleep(3 * time.Second) // rescan 为异步，等 NM 完成一轮扫描
+		out, err := runBin(timeout, "nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY,CHAN", "dev", "wifi", "list", "ifname", iface)
+		text := string(out)
+		if err != nil || strings.TrimSpace(text) == "" {
+			// nmcli 无结果 → iw 直扫兜底（嵌入式网卡常不进 NM 扫描列表）
+			if sudoOK() {
+				if iwOut, iwErr := runBin(20*time.Second, "sudo", "-n", "iw", "dev", iface, "scan"); iwErr == nil {
+					if parsed := parseIwScan(iwOut); parsed != "" {
+						return e.textResult(cmd, parsed)
+					}
+				}
+			}
+			return e.textResult(cmd, "未发现 WiFi 网络（已尝试 nmcli rescan + iw scan）\n"+errString(err)+"\n"+strings.TrimSpace(text))
+		}
+		return e.textResult(cmd, text)
 	case "wifi_status":
 		return e.netRun(cmd, timeout, "nmcli", "-t", "-f", "SSID,SIGNAL,CHAN,DEVICE", "dev", "wifi", "show")
 	case "channel":
@@ -442,6 +468,77 @@ func (e *Executor) virtualMac(cmd *ecpv1.Command, timeout time.Duration) *ecpv1.
 }
 
 // --- 辅助 ---------------------------------------------------------------
+
+// parseIwScan 把 `iw dev <iface> scan` 的块状输出转成 nmcli 行格式
+// （SSID:SIGNAL:SECURITY:CHAN），前端解析逻辑与 nmcli 输出一致，无需改动。
+func parseIwScan(out []byte) string {
+	var rows []string
+	var curSSID, curSec string
+	var curSig, curFreq int
+	flush := func() {
+		if curSSID == "" {
+			return
+		}
+		sec := curSec
+		if sec == "" {
+			sec = "--"
+		}
+		chanN := 0
+		if curFreq >= 4915 && curFreq <= 5825 { // 5GHz：信道 = (freq-5000)/5
+			chanN = (curFreq - 5000) / 5
+			if curFreq >= 4915 && curFreq < 5000 {
+				chanN = curFreq - 4915 // UNII-1 下沿
+			}
+		} else if curFreq >= 2412 && curFreq <= 2484 { // 2.4GHz
+			chanN = (curFreq - 2407) / 5
+		}
+		// signal dBm → 0-100 近似（-30→100, -90→10）
+		sig := 100 - (-curSig)
+		if sig < 0 {
+			sig = 0
+		}
+		if sig > 100 {
+			sig = 100
+		}
+		rows = append(rows, fmt.Sprintf("%s:%d:%s:%d", curSSID, sig, sec, chanN))
+		curSSID, curSec, curSig, curFreq = "", "", 0, 0
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		l := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(l, "BSS "):
+			flush() // 新块开始，先结算上一块
+		case strings.HasPrefix(l, "SSID:"):
+			curSSID = strings.TrimSpace(strings.TrimPrefix(l, "SSID:"))
+		case strings.HasPrefix(l, "signal:"):
+			// signal: -45.00 dBm
+			fields := strings.Fields(strings.TrimPrefix(l, "signal:"))
+			if len(fields) > 0 {
+				v := 0.0
+				if _, err := fmt.Sscanf(fields[0], "%f", &v); err == nil {
+					curSig = int(v)
+				}
+			}
+		case strings.HasPrefix(l, "freq:"):
+			fields := strings.Fields(strings.TrimPrefix(l, "freq:"))
+			if len(fields) > 0 {
+				fmt.Sscanf(fields[0], "%d", &curFreq)
+			}
+		case strings.HasPrefix(l, "RSN:"):
+			curSec = "WPA2"
+		case strings.HasPrefix(l, "WPA:"):
+			if curSec == "" {
+				curSec = "WPA"
+			}
+		case strings.HasPrefix(l, "WEP:"):
+			if curSec == "" {
+				curSec = "WEP"
+			}
+		}
+	}
+	flush()
+	return strings.Join(rows, "\n")
+}
 
 // netRun 只读执行（普通用户即可），失败返回文本。
 func (e *Executor) netRun(cmd *ecpv1.Command, timeout time.Duration, name string, args ...string) *ecpv1.CommandResult {
