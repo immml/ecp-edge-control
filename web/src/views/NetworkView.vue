@@ -1,11 +1,38 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { Refresh, VideoPlay, VideoPause, Upload } from '@element-plus/icons-vue'
+import { Refresh, VideoPlay, VideoPause, Upload, Download } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { api, ResultStatus, type ApiNode, type CommandResult } from '@/api/client'
+import NetworkPanel from '@/components/NetworkPanel.vue'
 
+const activeTab = ref('mesh')
 const nodes = ref<ApiNode[]>([])
+
+// —— VPN / Clash ——
+const vpn = ref({ name: 'ecp-vpn', server: '', port: 443, uuid: '', path: '/ecp-vpn', extra_ips: '' })
+const vpnBusy = ref(false)
+async function exportClash() {
+  if (!vpn.value.server || !vpn.value.uuid) {
+    ElMessage.warning('请填写公网入口域名（vpn.xxx）与 UUID')
+    return
+  }
+  vpnBusy.value = true
+  try {
+    const yaml = await api.exportClash({ ...vpn.value })
+    const blob = new Blob([yaml], { type: 'application/x-yaml' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `clash-${vpn.value.server}.yaml`
+    a.click()
+    URL.revokeObjectURL(a.href)
+    ElMessage.success('Clash 配置已下载（导入 Clash 客户端后内网段走 VPN）')
+  } catch (e: any) {
+    ElMessage.error(`导出失败：${e?.message || ''}`)
+  } finally {
+    vpnBusy.value = false
+  }
+}
 const loading = ref(false)
 const busy = ref<string>('')
 
@@ -248,7 +275,9 @@ onMounted(load)
 </script>
 
 <template>
-  <div style="display: flex; flex-direction: column; gap: 14px">
+  <el-tabs v-model="activeTab">
+    <el-tab-pane label="组网（Tailscale / FRP）" name="mesh">
+      <div style="display: flex; flex-direction: column; gap: 14px">
     <div style="display: flex; align-items: center; justify-content: space-between">
       <div class="text-secondary" style="font-size: 13px">
         组网管理 · {{ nodes.length }} 个在线节点。FRP 多 frpc 实例（ChmlFrp / HayFRP / 自建 frps）+ Tailscale mesh。
@@ -357,5 +386,48 @@ onMounted(load)
         <el-button type="primary" :loading="editSaving" @click="saveFrpcIni">保存</el-button>
       </template>
     </el-dialog>
-  </div>
+    </div>
+    </el-tab-pane>
+    <el-tab-pane label="网络管理（WiFi / 网卡 / 测速 / 虚拟MAC）" name="net">
+      <div style="display: flex; flex-direction: column; gap: 14px">
+        <div class="text-secondary" style="font-size: 13px">
+          网络管理 · 扫描 WiFi、连接、以太网/IP（DHCP / 手动 / PPPoE）、信道、ping、测速、虚拟 MAC。
+        </div>
+        <NetworkPanel v-for="n in nodes" :key="'net-' + n.id" :node="n" />
+      </div>
+    </el-tab-pane>
+    <el-tab-pane label="VPN / Clash" name="vpn">
+      <div class="text-secondary" style="font-size: 13px; margin-bottom: 10px">
+        VPN 网关（xray VMess+WS 经 Cloudflare Tunnel 暴露）→ 导出 Clash 配置，在外网即可访问这些内网设备。
+        网关部署：节点上执行 <code class="mono">sudo bash deploy/xray-vpn.sh</code>，再按脚本提示建 Cloudflare Tunnel（vpn.你的域名 → http://127.0.0.1:8444）。
+      </div>
+      <el-card shadow="never" style="max-width: 560px">
+        <el-form label-width="110px" size="small">
+          <el-form-item label="入口域名">
+            <el-input v-model="vpn.server" placeholder="vpn.immml.top（Cloudflare Tunnel Hostname）" />
+          </el-form-item>
+          <el-form-item label="端口">
+            <el-input-number v-model="vpn.port" :min="1" :max="65535" style="width: 140px" />
+          </el-form-item>
+          <el-form-item label="UUID">
+            <el-input v-model="vpn.uuid" placeholder="xray 生成（如 3f7c...-.... ）" />
+          </el-form-item>
+          <el-form-item label="WS 路径">
+            <el-input v-model="vpn.path" placeholder="/ecp-vpn（与 xray-vpn.sh --path 一致）" />
+          </el-form-item>
+          <el-form-item label="节点名">
+            <el-input v-model="vpn.name" placeholder="ecp-vpn" />
+          </el-form-item>
+          <el-form-item label="附加网段">
+            <el-input v-model="vpn.extra_ips" placeholder="可选，逗号分隔，默认含 192.168/16、10/8、100.64/10" />
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" :loading="vpnBusy" @click="exportClash">
+              <el-icon style="margin-right: 4px"><Download /></el-icon>导出 Clash 配置
+            </el-button>
+          </el-form-item>
+        </el-form>
+      </el-card>
+    </el-tab-pane>
+  </el-tabs>
 </template>

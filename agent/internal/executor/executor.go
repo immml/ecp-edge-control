@@ -79,6 +79,10 @@ func (e *Executor) Handle(cmd *ecpv1.Command) *ecpv1.CommandResult {
 			return e.vncStop(cmd)
 		case ecpv1.CommandType_COMMAND_TYPE_AGENT_UPGRADE:
 			return e.agentUpgrade(cmd)
+		case ecpv1.CommandType_COMMAND_TYPE_NET_GET:
+			return e.netGet(cmd)
+		case ecpv1.CommandType_COMMAND_TYPE_NET_SET:
+			return e.netSet(cmd)
 		default:
 			return e.fail(cmd, "不支持的指令类型: "+cmd.GetType().String())
 		}

@@ -205,8 +205,8 @@ class ApiClient {
     return this.request('GET', `api/v1/audit${q}`)
   }
 
-  async execCommand(nodeId: string, type: string, params?: Record<string, unknown>): Promise<CommandResult> {
-    const r = await this.request<CommandResult>('POST', `api/v1/nodes/${nodeId}/command`, { type, params })
+  async execCommand(nodeId: string, type: string, params?: Record<string, unknown>, timeoutSec = 0): Promise<CommandResult> {
+    const r = await this.request<CommandResult>('POST', `api/v1/nodes/${nodeId}/command`, { type, params, timeout_sec: timeoutSec || undefined })
     // status 归一化为数字（兼容未来 protojson 字符串形态）
     r.status = Number(r.status) || 0
     // protojson 把 bytes 字段（stdout）序列化为 base64，这里统一还原为 UTF-8 文本
@@ -231,12 +231,12 @@ class ApiClient {
   }
 
   /** 经紧急通道（relay）执行指令：主通道失败时自动降级。 */
-  async execCommandRelay(nodeId: string, type: string, params?: Record<string, unknown>): Promise<CommandResult> {
+  async execCommandRelay(nodeId: string, type: string, params?: Record<string, unknown>, timeoutSec = 0): Promise<CommandResult> {
     const { relay, b64decode } = await import('./relay')
     if (!relay.isEnabled() || !relay.isOnline()) {
       throw new Error('紧急通道不可用')
     }
-    const frame = await relay.execCommand(nodeId, type, params)
+    const frame = await relay.execCommand(nodeId, type, params, timeoutSec)
     const res = frame.result || { status: 0, message: '无回执' }
     return {
       status: Number(res.status) || 0,
@@ -250,13 +250,13 @@ class ApiClient {
   }
 
   /** 统一入口：优先主通道，失败自动降级紧急通道（仅当 relay 已启用）。 */
-  async execCommandAuto(nodeId: string, type: string, params?: Record<string, unknown>): Promise<CommandResult> {
+  async execCommandAuto(nodeId: string, type: string, params?: Record<string, unknown>, timeoutSec = 0): Promise<CommandResult> {
     try {
-      return await this.execCommand(nodeId, type, params)
+      return await this.execCommand(nodeId, type, params, timeoutSec)
     } catch (e) {
       const { relay } = await import('./relay')
       if (relay.isEnabled() && relay.isOnline()) {
-        return this.execCommandRelay(nodeId, type, params)
+        return this.execCommandRelay(nodeId, type, params, timeoutSec)
       }
       throw e
     }
@@ -264,6 +264,21 @@ class ApiClient {
 
   async batchCommand(nodeIds: string[], type: string, params?: Record<string, unknown>): Promise<{ total: number; results: BatchResult[] }> {
     return this.request('POST', 'api/v1/nodes/batch/command', { node_ids: nodeIds, type, params })
+  }
+
+  // —— VPN / Clash ——
+  /** 导出 Clash 配置（访问内网设备）；返回 yaml 文本。 */
+  async exportClash(cfg: { name?: string; server: string; port?: number; uuid: string; path?: string; extra_ips?: string }): Promise<string> {
+    const resp = await fetch(this.base + 'api/v1/vpn/clash-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.token}` },
+      body: JSON.stringify(cfg),
+    })
+    if (!resp.ok) {
+      const j = await resp.json().catch(() => null)
+      throw new Error((j && j.message) || `HTTP ${resp.status}`)
+    }
+    return resp.text()
   }
 
   // —— OTA ——

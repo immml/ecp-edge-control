@@ -84,6 +84,8 @@ func New(st *store.Store, sessions *session.Manager, dispatch *command.Dispatche
 	{
 		api.GET("/me", h.Me)
 		api.POST("/change-password", h.ChangePassword)
+		// VPN/Clash：导出 Clash 配置（访问内网）
+		api.POST("/vpn/clash-config", h.RequireRole(model.RoleOperator), h.ClashConfig)
 		// 紧急通道配置（relay）：登录后下发，前端据此建立降级通道
 		api.GET("/relay/config", h.RelayConfig)
 		api.GET("/nodes", h.ListNodes)
@@ -362,7 +364,12 @@ func (h *Handler) ExecCommand(c *gin.Context) {
 		return
 	}
 	cmd := &ecpv1.Command{Type: commandType(in.Type), Params: in.Params, TimeoutSec: in.TimeoutSec}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 35*time.Second)
+	// HTTP 层超时 = 指令超时 + 10s 余量（默认 35s）；测速等长任务通过 timeout_sec 调大
+	httpTo := 35 * time.Second
+	if in.TimeoutSec > 0 {
+		httpTo = time.Duration(in.TimeoutSec+10) * time.Second
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), httpTo)
 	defer cancel()
 	res, err := h.dispatch.Dispatch(ctx, c.GetUint("uid"), c.GetString("username"), id, cmd)
 	if err != nil {
@@ -411,6 +418,10 @@ func (h *Handler) BatchCommand(c *gin.Context) {
 			defer wg.Done()
 			ctx, cancel := context.WithTimeout(c.Request.Context(), 35*time.Second)
 			defer cancel()
+			if in.TimeoutSec > 0 {
+				ctx, cancel = context.WithTimeout(c.Request.Context(), time.Duration(in.TimeoutSec+10)*time.Second)
+				defer cancel()
+			}
 			res, err := h.dispatch.Dispatch(ctx, uid, username, nodeID, cmd)
 			if err != nil {
 				if err.Error() == "节点离线，无法下发指令" {
