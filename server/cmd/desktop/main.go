@@ -24,6 +24,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,8 +35,10 @@ import (
 	"ecp.dev/ecp/server/internal/auth"
 	"ecp.dev/ecp/server/internal/ca"
 	"ecp.dev/ecp/server/internal/command"
+	"ecp.dev/ecp/server/internal/feishu"
 	"ecp.dev/ecp/server/internal/config"
 	"ecp.dev/ecp/server/internal/grpcserver"
+	"ecp.dev/ecp/server/internal/lock"
 	"ecp.dev/ecp/server/internal/store"
 	"ecp.dev/ecp/server/internal/store/model"
 	"ecp.dev/ecp/server/internal/web"
@@ -68,6 +71,10 @@ func main() {
 	logFilePath := filepath.Join(cfg.Server.DataDir, "desktop.log")
 	log := newFileLogger(logFilePath)
 
+	// 桌面双击启动无 shell 环境变量的注入渠道：若 data/ecp.env 存在则读取为环境变量
+	// （KEY=VALUE 每行，# 注释行忽略）。凭据/令牌既可经此文件配置。
+	loadEnvFile(cfg.Server.DataDir)
+
 	if err := cfg.EnsureDirs(); err != nil {
 		fmt.Fprintf(os.Stderr, "初始化目录失败: %v\n", err)
 		os.Exit(1)
@@ -93,8 +100,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	// gRPC：节点回连入口，保持 0.0.0.0:7443 默认
+	// gRPC：节点回连入口，保持 0.0.0.0:7443 默认。
+	// 端口预检：与 server.exe 共用 7443，防双实例冲突（第二个启动者明确报错退出）。
+	if err := lock.CheckPortFree(cfg.Server.GRPCListen); err != nil {
+		showFatal(err.Error())
+		return
+	}
 	grpcSrv := grpcserver.New(st, caInstance, cfg, log)
+	// 飞书群推送（带签名 Webhook）：告警事件聚合推送到群
+	if pushCfg := feishu.PushConfigFromEnv(); pushCfg.Enabled() {
+		grpcSrv.SetAlertNotifier(func(nodeID, kind, message string) {
+			feishu.NotifyWithLog(pushCfg, log, fmt.Sprintf("[节点告警] %s\n%s", nodeID, message))
+		})
+		feishu.NotifyWithLog(pushCfg, log, "控制面已上线：ECP 边缘节点控制台")
+	}
 	go func() {
 		if err := grpcSrv.Serve(cfg.Server.GRPCListen); err != nil {
 			log.Error("gRPC 服务异常", "err", err)
@@ -103,6 +122,14 @@ func main() {
 
 	// 控制台 engine（WebView2 / 浏览器双形态共用一套）
 	disp := command.New(grpcSrv.Sessions(), st, log.Info)
+	// 飞书双向指令（长连接免公网回调）：配置 ECP_FEISHU_APP_ID/SECRET 后自动启用
+	if fapp := feishu.New(feishu.ConfigFromEnv(), disp, st, log); fapp != nil {
+		go func() {
+			if err := fapp.Run(context.Background()); err != nil && err != context.Canceled {
+				log.Warn("飞书长连接退出", "err", err)
+			}
+		}()
+	}
 	advIP := detectAdvertiseIP(cfg)
 	engine := api.New(st, grpcSrv.Sessions(), disp, grpcSrv, log.Info, cfg.Server.DataDir, advIP, httpPort(cfg))
 	engine.NoRoute(func(c *gin.Context) {
@@ -247,4 +274,34 @@ func newFileLogger(path string) *slog.Logger {
 	}
 	w := io.MultiWriter(os.Stdout, f)
 	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelInfo}))
+}
+// showFatal 在桌面模式下展示致命错误：Windows 弹 MessageDialog，其它平台打印 stderr。
+// 复用 webview 的消息框能力——但对"端口冲突"这类启动前错误，webview 尚未创建，
+// 直接退回控制台输出 + 短暂等待，由用户从命令行观察。
+func showFatal(msg string) {
+	fmt.Fprintln(os.Stderr, "启动失败:", msg)
+	fmt.Fprintln(os.Stderr, "提示：若已有控制面（server.exe / ecp-desktop.exe）在运行，请先关闭它再启动本程序。")
+}
+
+// loadEnvFile 读取 dataDir/ecp.env（KEY=VALUE 每行，# 开头为注释），
+// 注入为进程环境变量。桌面版双击启动时的凭据配置渠道；已存在的环境变量优先。
+func loadEnvFile(dataDir string) {
+	p := filepath.Join(dataDir, "ecp.env")
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if i := strings.Index(line, "="); i > 0 {
+			k := strings.TrimSpace(line[:i])
+			v := strings.TrimSpace(line[i+1:])
+			if os.Getenv(k) == "" {
+				_ = os.Setenv(k, v)
+			}
+		}
+	}
 }

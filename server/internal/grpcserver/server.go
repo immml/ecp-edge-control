@@ -49,6 +49,14 @@ type Server struct {
 
 	tunnelsMu sync.Mutex
 	tunnels   map[string]*nodeTunnel // nodeID -> 常驻端口转发隧道
+
+	// alertNotify 节点事件（alert_fired）推送回调：由上层注入（如飞书群推送）。
+	alertNotify func(nodeID, kind, message string)
+}
+
+// SetAlertNotifier 注册节点事件通知回调；收到 alert_fired 事件时调用（落库后）。
+func (s *Server) SetAlertNotifier(f func(nodeID, kind, message string)) {
+	s.alertNotify = f
 }
 
 // nodeTunnel 是一条 Agent 打开的常驻 Tunnel 流。
@@ -414,6 +422,10 @@ func (s *Server) handleAgentMessage(sess *session.Session, msg *ecpv1.AgentMessa
 		}
 		if err := s.store.SaveAlertEvent(ev); err != nil {
 			s.log.Warn("告警事件落库失败", "node_id", msg.NodeId, "err", err)
+		}
+		// 告警推送（如飞书群）：落库后触发，不阻塞主流程
+		if p.Event.Kind == "alert_fired" && s.alertNotify != nil {
+			go s.alertNotify(msg.NodeId, p.Event.Kind, p.Event.Message)
 		}
 	}
 }

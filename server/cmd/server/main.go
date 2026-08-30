@@ -29,8 +29,10 @@ import (
 	"ecp.dev/ecp/server/internal/auth"
 	"ecp.dev/ecp/server/internal/ca"
 	"ecp.dev/ecp/server/internal/command"
+	"ecp.dev/ecp/server/internal/feishu"
 	"ecp.dev/ecp/server/internal/config"
 	"ecp.dev/ecp/server/internal/grpcserver"
+	"ecp.dev/ecp/server/internal/lock"
 	"ecp.dev/ecp/server/internal/logx"
 	"ecp.dev/ecp/server/internal/store"
 	"ecp.dev/ecp/server/internal/store/model"
@@ -131,7 +133,20 @@ func main() {
 	}
 
 	// 启动 gRPC 接入层（节点注册与指令通道）
+	// 端口预检：与 ecp-desktop.exe 共用 7443，防双实例冲突（第二个启动者报错退出）。
+	if err := lock.CheckPortFree(cfg.Server.GRPCListen); err != nil {
+		log.Error("gRPC 端口被占用", "err", err)
+		fmt.Fprintln(os.Stderr, "\n提示：若已有控制面（server.exe / ecp-desktop.exe）在运行，请先关闭它再启动。")
+		os.Exit(1)
+	}
 	grpcSrv := grpcserver.New(st, caInstance, cfg, log)
+	// 飞书群推送（带签名 Webhook）：告警事件聚合推送到群
+	if pushCfg := feishu.PushConfigFromEnv(); pushCfg.Enabled() {
+		grpcSrv.SetAlertNotifier(func(nodeID, kind, message string) {
+			feishu.NotifyWithLog(pushCfg, log, fmt.Sprintf("[节点告警] %s\n%s", nodeID, message))
+		})
+		feishu.NotifyWithLog(pushCfg, log, "控制面已上线：ECP 边缘节点控制台")
+	}
 	go func() {
 		if err := grpcSrv.Serve(cfg.Server.GRPCListen); err != nil {
 			log.Error("gRPC 服务异常", "err", err)
@@ -140,6 +155,14 @@ func main() {
 
 	// REST + 控制台 HTTPS
 	disp := command.New(grpcSrv.Sessions(), st, log.Info)
+	// 飞书双向指令（长连接免公网回调）：配置 ECP_FEISHU_APP_ID/SECRET 后自动启用
+	if fapp := feishu.New(feishu.ConfigFromEnv(), disp, st, log); fapp != nil {
+		go func() {
+			if err := fapp.Run(context.Background()); err != nil && err != context.Canceled {
+				log.Warn("飞书长连接退出", "err", err)
+			}
+		}()
+	}
 	// OTA 通告地址：优先 advertise.endpoints[0]（如 "100.68.202.101:7443"）取 IP；
 	// 为空时自动探测本机 Tailscale IPv4（tailscale status），保证 OTA 下载 URL 节点可达
 	advIP := ""

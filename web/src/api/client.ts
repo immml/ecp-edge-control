@@ -178,6 +178,11 @@ class ApiClient {
     return this.request('GET', 'api/v1/me')
   }
 
+  /** 修改当前用户密码（校验旧密码）。 */
+  async changePassword(oldPassword: string, newPassword: string): Promise<void> {
+    await this.request('POST', 'api/v1/change-password', { old_password: oldPassword, new_password: newPassword })
+  }
+
   async listNodes(): Promise<ApiNode[]> {
     const r = await this.request<{ nodes: ApiNode[]; total: number }>('GET', 'api/v1/nodes')
     return r.nodes

@@ -83,6 +83,7 @@ func New(st *store.Store, sessions *session.Manager, dispatch *command.Dispatche
 	api.Use(h.JWTAuth())
 	{
 		api.GET("/me", h.Me)
+		api.POST("/change-password", h.ChangePassword)
 		// 紧急通道配置（relay）：登录后下发，前端据此建立降级通道
 		api.GET("/relay/config", h.RelayConfig)
 		api.GET("/nodes", h.ListNodes)
@@ -178,6 +179,47 @@ func (h *Handler) Me(c *gin.Context) {
 		"username": c.GetString("username"),
 		"role":     c.GetString("role"),
 	})
+}
+
+// ChangePassword 修改当前登录用户的密码：校验旧密码后更新。
+func (h *Handler) ChangePassword(c *gin.Context) {
+	// JWT 中间件注入的字段（见 JWTAuth：uid/username/role）
+	userID := c.GetUint("uid")
+	username := c.GetString("username")
+
+	var in struct {
+		OldPassword string `json:"old_password"`
+		NewPassword string `json:"new_password"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil || in.OldPassword == "" || in.NewPassword == "" {
+		fail(c, http.StatusBadRequest, codeParam, "旧密码与新密码必填")
+		return
+	}
+	if len(in.NewPassword) < 6 || len(in.NewPassword) > 64 {
+		fail(c, http.StatusBadRequest, codeParam, "新密码长度 6-64 位")
+		return
+	}
+	u, err := h.store.GetUserByUsername(username)
+	if err != nil {
+		fail(c, http.StatusUnauthorized, codeUnauth, "用户不存在")
+		return
+	}
+	if !auth.CheckPassword(u.PasswordHash, in.OldPassword) {
+		fail(c, http.StatusUnauthorized, codeUnauth, "旧密码错误")
+		return
+	}
+	hash, err := auth.HashPassword(in.NewPassword)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, codeInternal, "密码处理失败")
+		return
+	}
+	if err := h.store.UpdatePassword(userID, hash); err != nil {
+		fail(c, http.StatusInternalServerError, codeInternal, "密码更新失败")
+		return
+	}
+	// 审计留痕
+	h.log("用户修改密码", "user", username, "result", "ok")
+	ok(c, gin.H{"changed": true})
 }
 
 // ListNodes 返回节点列表（含在线状态与最新遥测摘要）。

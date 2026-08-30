@@ -51,7 +51,14 @@ export default {
     let expected = ''
     let role = ''
     if (path === '/agent') {
-      expected = env.AGENT_TOKEN || ''
+      // 节点令牌 = HMAC-SHA256(AGENT_TOKEN 主密钥, node_id)（十六进制小写）。
+      // 每节点独立令牌：泄露一个节点令牌不影响其他节点；主密钥仍在 Secrets 中加密存放。
+      // 兼容：主密钥原值也接受（旧版 Agent 直配主密钥时不中断）。
+      const master = env.AGENT_TOKEN || ''
+      expected = master ? await hmacSha256Hex(master, nodeId) : ''
+      if (expected && constantTimeEqual(token, master)) {
+        expected = master // 兼容旧配置直配 AGENT_TOKEN
+      }
       role = 'agent'
     } else if (path === '/gui') {
       expected = env.GUI_TOKEN || ''
@@ -88,6 +95,22 @@ function constantTimeEqual(a: string, b: string): boolean {
     diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
   }
   return diff === 0
+}
+
+/** hmacSha256Hex 计算 HMAC-SHA256(key, msg) 的十六进制串（Web Crypto 异步）。 */
+async function hmacSha256Hex(key: string, msg: string): Promise<string> {
+  const enc = new TextEncoder()
+  const keyBuf = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(key),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  )
+  const sig = await crypto.subtle.sign('HMAC', keyBuf, enc.encode(msg))
+  return Array.from(new Uint8Array(sig))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
 }
 
 function json(data: unknown, status = 200): Response {

@@ -52,6 +52,51 @@ onMounted(() => {
   timer = setInterval(refreshRelayState, 30000)
 })
 onUnmounted(() => clearInterval(timer))
+
+// —— 修改密码 ——
+async function openChangePassword() {
+  const { ElMessageBox, ElMessage } = await import('element-plus')
+  const { api } = await import('@/api/client')
+  let oldPwd = ''
+  try {
+    const r1 = await ElMessageBox.prompt('请输入当前密码', '修改密码', {
+      inputType: 'password',
+      inputPlaceholder: '当前密码',
+      confirmButtonText: '下一步',
+    })
+    oldPwd = r1.value
+  } catch {
+    return
+  }
+  let newPwd = ''
+  try {
+    const r2 = await ElMessageBox.prompt('新密码（6-64 位）', '修改密码', {
+      inputType: 'password',
+      inputPlaceholder: '新密码',
+      confirmButtonText: '下一步',
+      inputValidator: (v: string) => (v && v.length >= 6 && v.length <= 64 ? true : '新密码 6-64 位'),
+    })
+    newPwd = r2.value
+  } catch {
+    return
+  }
+  try {
+    await ElMessageBox.prompt('再次输入新密码确认', '修改密码', {
+      inputType: 'password',
+      inputPlaceholder: '确认新密码',
+      confirmButtonText: '确认修改',
+      inputValidator: (v: string) => (v === newPwd ? true : '两次输入不一致'),
+    })
+  } catch {
+    return
+  }
+  try {
+    await api.changePassword(oldPwd, newPwd)
+    ElMessage.success('密码已修改')
+  } catch (e: any) {
+    ElMessage.error(`修改失败：${e?.message || ''}`)
+  }
+}
 </script>
 
 <template>
@@ -74,6 +119,12 @@ onUnmounted(() => clearInterval(timer))
           <span>{{ item.title }}</span>
         </router-link>
       </nav>
+
+      <div class="sidebar-foot">
+        <el-button size="small" text style="width: 100%; justify-content: flex-start" @click="openChangePassword">
+          <el-icon style="margin-right: 6px"><Lock /></el-icon>修改密码
+        </el-button>
+      </div>
 
       <div class="sidebar-footer">
         <div>Tailscale 自组网</div>

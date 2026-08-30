@@ -148,6 +148,15 @@ body {
   line-height: 1.7;
 }
 
+.sidebar-foot {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.sidebar-foot .el-button {
+  color: var(--text-secondary, #606266);
+}
+
 .relay-status {
   display: flex;
   align-items: center;

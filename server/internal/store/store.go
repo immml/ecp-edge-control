@@ -270,6 +270,11 @@ func (s *Store) CountUsers() (int64, error) {
 	return n, nil
 }
 
+// UpdatePassword 更新用户密码哈希（改密码入口用）。
+func (s *Store) UpdatePassword(userID uint, hash string) error {
+	return s.db.Model(&model.User{}).Where("id = ?", userID).Update("password_hash", hash).Error
+}
+
 // UpdateLastLogin 记录用户最后登录时间。
 func (s *Store) UpdateLastLogin(id uint) error {
 	return s.db.Model(&model.User{}).
