@@ -21,6 +21,7 @@ import (
 	"ecp.dev/ecp/agent/internal/cache"
 	"ecp.dev/ecp/agent/internal/caps"
 	"ecp.dev/ecp/agent/internal/config"
+	"ecp.dev/ecp/agent/internal/relay"
 	"ecp.dev/ecp/agent/internal/transport"
 	ecpv1 "ecp.dev/ecp/proto/gen/ecp/v1"
 )
@@ -142,6 +143,16 @@ func cmdRun(args []string) {
 	defer cancel()
 
 	tr := transport.New(cfg, log, c)
+	// 紧急通道（Cloudflare Worker 中转）：配置启用时独立协程常驻，
+	// 与主通道并存；tailnet 不可达时 GUI 经它完成紧急控制。
+	if cfg.Relay.Enabled {
+		relayC := relay.New(cfg, log, tr.Exec(), s)
+		go func() {
+			if err := relayC.Run(ctx); err != nil && err != context.Canceled {
+				log.Warn("紧急通道退出", "err", err)
+			}
+		}()
+	}
 	if err := tr.Run(ctx); err != nil && err != context.Canceled {
 		fmt.Fprintf(os.Stderr, "运行异常: %v\n", err)
 		os.Exit(1)

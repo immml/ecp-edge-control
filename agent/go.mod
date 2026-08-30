@@ -4,7 +4,9 @@ go 1.27.0
 
 require (
 	ecp.dev/ecp/proto v0.0.0
+	github.com/creack/pty v1.1.24
 	github.com/glebarez/sqlite v1.11.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/shirou/gopsutil/v4 v4.25.6
 	google.golang.org/grpc v1.71.0
 	google.golang.org/protobuf v1.36.10
@@ -13,7 +15,6 @@ require (
 )
 
 require (
-	github.com/creack/pty v1.1.24 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/ebitengine/purego v0.8.4 // indirect
 	github.com/glebarez/go-sqlite v1.21.2 // indirect

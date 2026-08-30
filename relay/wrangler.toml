@@ -1,0 +1,26 @@
+# ECP 紧急通道 —— Cloudflare Worker 中转
+#
+# 部署：wrangler deploy（Free 计划：10 万请求/天，Durable Objects SQLite 后端免费可用）
+# 绑定自有域名：控制面板 → Workers & Pages → ecp-relay → 自定义域 → relay.example.com
+#
+# Secrets（必须配置，否则拒绝所有连接）：
+#   wrangler secret put AGENT_TOKEN   # Agent 出站鉴权
+#   wrangler secret put GUI_TOKEN     # 控制机 GUI 鉴权
+
+name = "ecp-relay"
+main = "src/index.ts"
+compatibility_date = "2025-04-01"
+
+# Durable Object：每个 node_id 一个房间，Agent/GUI 的连接进同一房间双向转发
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]
+
+# 自有域名（绑定后 Worker 同时可用 relay.example.com 访问）
+# routes = [
+#   { pattern = "relay.example.com", custom_domain = true },
+# ]

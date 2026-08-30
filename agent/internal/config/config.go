@@ -26,6 +26,7 @@ type Config struct {
 	Agent        AgentConfig        `yaml:"agent"`
 	Registration RegistrationConfig `yaml:"registration"`
 	ControlPlane ControlPlaneConfig `yaml:"control_plane"`
+	Relay        RelayConfig        `yaml:"relay"`
 	Telemetry    TelemetryConfig    `yaml:"telemetry"`
 	Cache        CacheConfig        `yaml:"cache"`
 	Alert        AlertConfig        `yaml:"alert"`
@@ -66,6 +67,19 @@ type ControlPlaneConfig struct {
 // TelemetryConfig 是状态采集配置。
 type TelemetryConfig struct {
 	Interval time.Duration `yaml:"interval"`
+}
+
+// RelayConfig 是紧急通道（Cloudflare Worker 中转）配置。
+//
+// Tailscale 主通道不可达时，Agent 与 GUI 两端出站 wss 连 Worker，
+// Worker + Durable Object 按 node_id 分房间双向转发，实现 NAT 穿透。
+// 流量为标准 TLS/WSS，自有域名，合规可审计。
+type RelayConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	// Worker 的 WSS 入口，如 wss://relay.example.com/agent
+	URL string `yaml:"url"`
+	// 鉴权令牌，与 Worker 侧 AGENT_TOKEN 一致；优先读环境变量 ECP_RELAY_TOKEN
+	Token string `yaml:"token"`
 }
 
 // CacheConfig 是本地缓存配置。控制面离线时数据先落这里，上线后补传。
@@ -140,6 +154,10 @@ func Load(path string) (*Config, error) {
 	// 环境变量覆盖：飞书 Webhook 属于凭据，优先走 env，避免写进配置文件/仓库。
 	if v := os.Getenv("ECP_FEISHU_WEBHOOK"); v != "" {
 		cfg.Alert.FeishuWebhook = v
+	}
+	// 紧急通道令牌同理，走 env 优先。
+	if v := os.Getenv("ECP_RELAY_TOKEN"); v != "" {
+		cfg.Relay.Token = v
 	}
 	return cfg, nil
 }

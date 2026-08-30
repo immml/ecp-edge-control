@@ -60,6 +60,11 @@ func New(cfg *config.Config, log *slog.Logger, ch *cache.Cache) *Transport {
 	return t
 }
 
+// Exec 暴露指令执行器，供紧急通道（relay）复用同一套 executor。
+func (t *Transport) Exec() *executor.Executor {
+	return t.exec
+}
+
 // Run 是 Agent 常驻主循环。阻塞直至 ctx 取消。会自动注册、建流、重连。
 func (t *Transport) Run(ctx context.Context) error {
 	id, err := register.LoadOrCreate(t.cfg)
