@@ -34,6 +34,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	ecpv1 "ecp.dev/ecp/proto/gen/ecp/v1"
+	"ecp.dev/ecp/agent/internal/cache"
 	"ecp.dev/ecp/agent/internal/caps"
 	"ecp.dev/ecp/agent/internal/collector"
 	"ecp.dev/ecp/agent/internal/config"
@@ -63,11 +64,12 @@ type Conn struct {
 	log  *slog.Logger
 	exec *executor.Executor
 	coll *collector.Collector
+	ch   *cache.Cache
 }
 
 // New 构造紧急通道连接器。
-func New(cfg *config.Config, log *slog.Logger, exec *executor.Executor, c *caps.Set) *Conn {
-	return &Conn{cfg: cfg, log: log, exec: exec, coll: collector.New(c)}
+func New(cfg *config.Config, log *slog.Logger, exec *executor.Executor, c *caps.Set, ch *cache.Cache) *Conn {
+	return &Conn{cfg: cfg, log: log, exec: exec, coll: collector.New(c), ch: ch}
 }
 
 // Run 常驻运行：出站连接 Worker，处理 command 帧、回 result、推遥测与心跳。
@@ -256,11 +258,28 @@ func (c *Conn) sendResult(ws *websocket.Conn, nodeID string, seq int64, res *ecp
 	}
 }
 
-// sendTelemetry 推送实时遥测（低频，供紧急模式下 GUI 直看状态）。
+// sendTelemetry 推送实时遥测（低频，供紧急模式下 GUI 直看状态），
+// 同时落本地缓存：控制面恢复后经 UploadBacklog 补传入库（沿用 Telemetry 表）。
 func (c *Conn) sendTelemetry(ws *websocket.Conn, nodeID string) error {
 	tele := c.coll.Collect()
 	if tele == nil {
 		return nil
+	}
+	// 本地落缓存（与主通道心跳 collectAndBuildHeartbeat 对齐），幂等可重入
+	if c.ch != nil {
+		_ = c.ch.AppendSample(&cache.Sample{
+			Ts:                 time.Now(),
+			CPUPercent:         tele.GetCpuPercent(),
+			MemTotalBytes:      tele.GetMemTotalBytes(),
+			MemUsedBytes:       tele.GetMemUsedBytes(),
+			DiskTotalBytes:     tele.GetDiskTotalBytes(),
+			DiskUsedBytes:      tele.GetDiskUsedBytes(),
+			NetRxBytes:         tele.GetNetRxBytes(),
+			NetTxBytes:         tele.GetNetTxBytes(),
+			Load1:              tele.GetLoad1(),
+			TemperatureCelsius: tele.GetTemperatureCelsius(),
+			ContainersRunning:  tele.GetContainerRunning(),
+		})
 	}
 	return c.writeJSON(ws, map[string]any{
 		"type":    "telemetry",

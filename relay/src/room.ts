@@ -2,15 +2,19 @@
  * ECP 紧急通道 —— Durable Object 房间。
  *
  * 每个 node_id 一个房间（DO idFromName(nodeId)）。房间内：
- *   - agentWs：Agent 连接（每节点唯一，新连接顶掉旧连接）
- *   - guiWs：  控制机 GUI 连接（可有多个，如多浏览器/多设备同时看）
+ *   - Agent 连接（每节点唯一，tag='agent'，新连接顶掉旧连接）
+ *   - GUI 连接（可多个，tag='gui'，如多浏览器/多设备同时看）
  *
  * 转发规则：
  *   agent → gui：广播给所有在线 GUI（遥测、结果、离线事件）
  *   gui   → agent：转给 Agent；Agent 不在线则落 SQLite 暂存，上线后按 seq 补发
  *
- * 心跳：Agent 每 30s 发 ping；本对象记录 lastAgentPing，60s 无心跳判离线，
- * 广播 offline 事件给 GUI。离线指令存 SQLite（Free 计划 5GB 存储上限，仅存少量指令）。
+ * 心跳：Agent 每 30s 发 ping；60s 无心跳判离线，广播 offline 事件给 GUI。
+ *
+ * 关键设计：**使用 WebSocket Hibernation API（acceptWebSocket with tags）**。
+ * DO 空闲冻结时内存字段会全部清空，但连接与 tag 由运行时保留——所以
+ * 转发/判活全部依赖 `state.getWebSockets(tag)` 而非内存字段，冻结唤醒后
+ * 身份判定依然正确。这是本房间避免"内存态丢失导致链路静默中断"的根本。
  */
 
 export interface Env {
@@ -27,13 +31,12 @@ interface Frame {
   [key: string]: unknown
 }
 
+const TAG_AGENT = 'agent'
+const TAG_GUI = 'gui'
 const AGENT_OFFLINE_MS = 60_000
 const HEARTBEAT_CHECK_MS = 15_000
 
 export class Room {
-  private conns: WebSocket[] = []
-  private agentWs: WebSocket | null = null
-  private guiWs: Set<WebSocket> = new Set()
   private lastAgentPing = 0
   private alarmScheduled = false
 
@@ -48,7 +51,10 @@ export class Room {
   }
 
   async fetch(request: Request): Promise<Response> {
-    const role = request.headers.get('X-Ecp-Role') || ''
+    // 角色判定：以 URL path 为准（/agent 或 /gui），不依赖自定义 header——
+    // header 在 WebSocket 升级跨 Worker→DO 边界时可能丢失，path 稳定可靠。
+    const url = new URL(request.url)
+    const role = url.pathname === '/agent' ? TAG_AGENT : TAG_GUI
 
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return new Response(JSON.stringify({ status: 'ok', service: 'ecp-relay-room' }), {
@@ -58,9 +64,10 @@ export class Room {
 
     const pair = new WebSocketPair()
     const ws = pair[1]
-    this.state.acceptWebSocket(ws)
+    // Hibernation 风格 accept：tag 进 storage，冻结唤醒后仍可 getWebSockets(tag) 找回
+    this.state.acceptWebSocket(ws, [role])
 
-    if (role === 'agent') {
+    if (role === TAG_AGENT) {
       this.attachAgent(ws)
     } else {
       this.attachGui(ws)
@@ -69,19 +76,19 @@ export class Room {
     return new Response(null, { status: 101, webSocket: pair[0] })
   }
 
-  // ---- 连接管理 ----
+  // ---- 连接管理（态全部来自 storage，不依赖内存）----
 
   private attachAgent(ws: WebSocket): void {
-    // 新 Agent 顶掉旧连接（重连场景）
-    if (this.agentWs && this.agentWs !== ws) {
-      try {
-        this.agentWs.close(4001, 'replaced by new agent connection')
-      } catch {
-        /* ignore */
+    // 新 Agent 顶掉旧连接（重连场景）；旧连接从 storage 里找
+    for (const old of this.agentConns()) {
+      if (old !== ws) {
+        try {
+          old.close(4001, 'replaced by new agent connection')
+        } catch {
+          /* ignore */
+        }
       }
     }
-    this.agentWs = ws
-    this.conns.push(ws)
     this.lastAgentPing = Date.now()
     this.armHeartbeatAlarm()
     console.log('[room] agent attached', { room: this.name })
@@ -90,22 +97,26 @@ export class Room {
     this.flushOffline(ws)
   }
 
+  private attachGui(ws: WebSocket): void {
+    console.log('[room] gui attached', { room: this.name, guis: this.guiConns().length })
+  }
+
+  private agentConns(): WebSocket[] {
+    return this.state.getWebSockets(TAG_AGENT)
+  }
+
+  private guiConns(): WebSocket[] {
+    return this.state.getWebSockets(TAG_GUI)
+  }
+
   private get name(): string {
-    // DO 实例名（node_id）；仅用于日志
     return this.state.id.toString()
   }
 
-  private attachGui(ws: WebSocket): void {
-    this.guiWs.add(ws)
-    this.conns.push(ws)
-    console.log('[room] gui attached', { room: this.name, guis: this.guiWs.size })
-  }
-
-  // ---- 消息处理（acceptWebSocket 后由运行时驱动事件回调） ----
+  // ---- 消息处理（Hibernation 由运行时驱动，冻结唤醒后自动恢复）----
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     if (typeof message !== 'string') {
-      // Agent 上行帧统一为 JSON；二进制忽略（避免意外解析失败炸掉房间）
       return
     }
 
@@ -116,8 +127,7 @@ export class Room {
       return
     }
 
-    const isFromAgent = ws === this.agentWs
-    console.log('[room] msg', { type: frame.type, fromAgent: isFromAgent, room: this.name })
+    const isFromAgent = this.agentConns().includes(ws)
 
     switch (frame.type) {
       case 'ping':
@@ -143,10 +153,11 @@ export class Room {
         break
 
       case 'command':
-        // GUI → Agent；Agent 离线则暂存
+        // GUI → Agent；Agent 不在线则暂存（等待上线补发）
         if (!isFromAgent) {
-          if (this.agentWs) {
-            this.safeSend(this.agentWs, message)
+          const agent = this.agentConns()[0]
+          if (agent) {
+            this.safeSend(agent, message)
           } else {
             await this.queueOffline(frame)
           }
@@ -154,36 +165,27 @@ export class Room {
         break
 
       default:
-        // 未知帧：从非 agent 发来的转发到 agent 也无意义，忽略
         break
     }
   }
 
   webSocketClose(ws: WebSocket): void {
-    this.detach(ws)
+    // Hibernation：关闭的连接自动从 tag 集合移除，无需手动 detach。
+    // 但若是 agent 连接断开，需广播 offline 给 GUI。
+    if (this.agentConns().includes(ws)) {
+      this.broadcastGui({ type: 'offline', node_id: this.name, ts: Date.now() })
+    }
   }
 
   webSocketError(ws: WebSocket): void {
-    this.detach(ws)
-  }
-
-  private detach(ws: WebSocket): void {
-    const i = this.conns.indexOf(ws)
-    if (i >= 0) this.conns.splice(i, 1)
-
-    if (ws === this.agentWs) {
-      this.agentWs = null
-      // Agent 掉线：通知所有 GUI
-      this.broadcastGui({ type: 'offline', node_id: String(ws.url || ''), ts: Date.now() })
-    }
-    this.guiWs.delete(ws)
+    this.webSocketClose(ws)
   }
 
   // ---- 转发辅助 ----
 
   private broadcastGui(frame: Frame): void {
     const raw = JSON.stringify(frame)
-    for (const g of this.guiWs) {
+    for (const g of this.guiConns()) {
       this.safeSend(g, raw)
     }
   }
@@ -192,7 +194,7 @@ export class Room {
     try {
       ws.send(raw)
     } catch {
-      /* 连接已死，由 close/error 事件清理 */
+      /* 连接已死，由 close 事件清理 */
     }
   }
 
@@ -219,17 +221,15 @@ export class Room {
     try {
       const rows = await this.state.storage.sql.exec(`SELECT seq, payload FROM offline ORDER BY seq LIMIT 100`)
       for (const row of rows.toArray()) {
-        const payload = row.payload as string
-        this.safeSend(ws, payload)
-        const seq = row.seq as number
-        await this.state.storage.sql.exec(`DELETE FROM offline WHERE seq = ?`, seq)
+        this.safeSend(ws, row.payload as string)
+        await this.state.storage.sql.exec(`DELETE FROM offline WHERE seq = ?`, row.seq as number)
       }
     } catch {
       /* 补发失败：下次重连再试 */
     }
   }
 
-  // ---- 心跳判活（alarm 驱动，不占连接消息额度） ----
+  // ---- 心跳判活（alarm 驱动，不占连接消息额度）----
 
   private armHeartbeatAlarm(): void {
     if (this.alarmScheduled) return
@@ -241,15 +241,16 @@ export class Room {
     this.alarmScheduled = false
 
     const now = Date.now()
-    if (this.agentWs && now - this.lastAgentPing > AGENT_OFFLINE_MS) {
+    const agent = this.agentConns()[0]
+    if (agent && now - this.lastAgentPing > AGENT_OFFLINE_MS) {
       // 心跳超时 → 判离线，断开连接并通知 GUI
       try {
-        this.agentWs.close(4000, 'heartbeat timeout')
+        agent.close(4000, 'heartbeat timeout')
       } catch {
         /* ignore */
       }
-      this.detach(this.agentWs)
-    } else if (this.agentWs) {
+      this.broadcastGui({ type: 'offline', node_id: this.name, ts: Date.now() })
+    } else if (agent) {
       // Agent 仍在线：下个周期再查
       this.armHeartbeatAlarm()
     }

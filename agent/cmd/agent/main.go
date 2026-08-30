@@ -146,7 +146,7 @@ func cmdRun(args []string) {
 	// 紧急通道（Cloudflare Worker 中转）：配置启用时独立协程常驻，
 	// 与主通道并存；tailnet 不可达时 GUI 经它完成紧急控制。
 	if cfg.Relay.Enabled {
-		relayC := relay.New(cfg, log, tr.Exec(), s)
+		relayC := relay.New(cfg, log, tr.Exec(), s, c)
 		go func() {
 			if err := relayC.Run(ctx); err != nil && err != context.Canceled {
 				log.Warn("紧急通道退出", "err", err)
