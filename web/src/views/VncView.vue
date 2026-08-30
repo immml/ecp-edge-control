@@ -32,7 +32,20 @@ async function loadStatus() {
 }
 
 async function startVnc() {
-  const r = await api.execCommand(nodeId, 'vnc_start', {})
+  // 询问用户设置 VNC 密码（连接远程桌面时使用）
+  const res = await ElMessageBox.prompt(
+    '设置 VNC 访问密码，连接远程桌面时需输入此密码。',
+    '设置 VNC 密码',
+    {
+      inputType: 'password',
+      inputPlaceholder: '输入密码（至少 4 位）',
+      inputValidator: (v: string) => (v && v.trim().length >= 4 ? true : '密码至少 4 位'),
+      confirmButtonText: '设置并启动',
+    },
+  ).catch(() => null)
+  if (!res?.value) return
+  const password = res.value as string
+  const r = await api.execCommand(nodeId, 'vnc_start', { password })
   await handleVncResult(r, '启动 VNC')
   await loadStatus()
   if (vncStatus.value?.running) connect()
@@ -56,7 +69,20 @@ async function handleVncResult(r: CommandResult, label: string) {
        </div>`,
       `${label}需要提权`,
     )
-    if (res) await loadStatus()
+    if (res) {
+      // 用户已执行脚本（可能已配置免密 sudo + 启动 VNC）：自动重试启动
+      await loadStatus()
+      if (!vncStatus.value?.running) {
+        const r2 = await api.execCommand(nodeId, 'vnc_start', {})
+        if (r2.status === ResultStatus.OK) {
+          ElMessage.success('VNC 已启动')
+        } else if (r2.status !== ResultStatus.NEEDS_PRIVILEGE) {
+          ElMessage.warning(`仍未成功：${r2.message || ''}`)
+        }
+      }
+      await loadStatus()
+      if (vncStatus.value?.running) connect()
+    }
   } else if (r.status === ResultStatus.OK) {
     ElMessage.success(`${label}成功`)
   } else {

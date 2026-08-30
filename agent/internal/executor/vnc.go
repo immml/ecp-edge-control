@@ -45,12 +45,12 @@ func (e *Executor) vncStatus(cmd *ecpv1.Command) *ecpv1.CommandResult {
 		st["running"] = true
 		st["port"] = port
 	}
-	// 密码（tigervnc 用户目录）
+	// 密码（root 或普通用户目录，vncserver 以 root 跑时在 /root/.vnc）
 	if out, err := runBin(timeout, "sh", "-c",
-		"ls $HOME/.vnc/passwd >/dev/null 2>&1 && echo 1 || echo 0"); err == nil && strings.TrimSpace(string(out)) == "1" {
+		"ls /root/.vnc/passwd $HOME/.vnc/passwd >/dev/null 2>&1 && echo 1 || echo 0"); err == nil && strings.TrimSpace(string(out)) == "1" {
 		st["password"] = true
 	} else {
-		st["hint"] = "VNC 密码未设置（首次启动需要 vncpasswd）"
+		st["hint"] = "VNC 密码未设置（平台会自动设为 orangepi）"
 	}
 	data, _ := json.Marshal(st)
 	r := e.base(cmd)
@@ -60,31 +60,27 @@ func (e *Executor) vncStatus(cmd *ecpv1.Command) *ecpv1.CommandResult {
 	return r
 }
 
-// vncStart 启动 VNC server。
+// vncStart 启动 VNC server（自动设密码 + 启动，一条链路）。
 //
-// 参数：geometry（可选，默认 1280x800）。首次启动若无密码则提示先设 vncpasswd。
-// 需要 root/用户级 vncserver：有免密 sudo 则直接执行，否则降级脚本。
+// 参数：geometry（可选，默认 1280x800）、password（可选，默认 orangepi）。
+// 实现：vncpasswd -f 写入密码（root 用户目录 /root/.vnc/passwd）后启动 vncserver。
+// 提权：节点有免密 sudo 则全自动；否则返回一次性授权脚本（自动配置 sudoers
+// NOPASSWD + 设密码 + 启动），用户 sudo 执行一次后平台全自动。
 func (e *Executor) vncStart(cmd *ecpv1.Command) *ecpv1.CommandResult {
 	timeout := dur(cmd.GetTimeoutSec(), 30)
 	geometry := getString(cmd.GetParams(), "geometry")
 	if geometry == "" {
 		geometry = "1280x800"
 	}
-	// 检查密码
-	hasPwd := false
-	if out, err := runBin(timeout, "sh", "-c", "ls $HOME/.vnc/passwd >/dev/null 2>&1 && echo 1 || echo 0"); err == nil && strings.TrimSpace(string(out)) == "1" {
-		hasPwd = true
+	password := getString(cmd.GetParams(), "password")
+	if password == "" {
+		password = "orangepi"
 	}
-	script := "vncserver -geometry " + geometry + " -localhost no -AlwaysShared"
-	if !hasPwd {
-		r := e.base(cmd)
-		r.Status = ecpv1.ResultStatus_RESULT_STATUS_NEEDS_PRIVILEGE
-		r.PrivilegeScript = "#!/bin/bash\nset -euo pipefail\nvncpasswd  # 按提示设置 VNC 密码（必做一次）\n" + script + "\n"
-		r.PrivilegeHint = "VNC 密码未设置，请在节点上先执行 vncpasswd 设密码，再启动"
-		return r
-	}
+	setup := "mkdir -p /root/.vnc && echo '" + password + "' | vncpasswd -f > /root/.vnc/passwd && chmod 600 /root/.vnc/passwd"
+	startCmd := "vncserver -geometry " + geometry + " -AlwaysShared"
+
 	if sudoOK() {
-		out, err := runBin(timeout, "sudo", "bash", "-c", script)
+		out, err := runBin(timeout, "sudo", "bash", "-c", setup+" && "+startCmd)
 		r := e.base(cmd)
 		r.Stdout = out
 		if err != nil {
@@ -93,13 +89,25 @@ func (e *Executor) vncStart(cmd *ecpv1.Command) *ecpv1.CommandResult {
 			return r
 		}
 		r.Status = ecpv1.ResultStatus_RESULT_STATUS_OK
-		r.Message = "VNC 已启动（端口 " + itoa(vncPortBase) + "）"
+		r.Message = "VNC 已启动（端口 " + itoa(vncPortBase) + "，密码 " + password + "）"
 		return r
 	}
+
+	// 无免密 sudo：返回一次性授权脚本（含 sudoers 配置 + 设密码 + 启动）
 	r := e.base(cmd)
 	r.Status = ecpv1.ResultStatus_RESULT_STATUS_NEEDS_PRIVILEGE
-	r.PrivilegeScript = "#!/bin/bash\nset -euo pipefail\n" + script + "\n"
-	r.PrivilegeHint = "启动 VNC 需要权限，请人工 sudo 执行以下脚本"
+	r.PrivilegeScript = `#!/bin/bash
+set -euo pipefail
+# 1) 一次性授权：之后平台对节点的提权操作（VNC/frpc/tailscale 启停、写配置）全自动。
+#    如需取消授权：rm /etc/sudoers.d/ecp-agent
+echo "orangepi ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/ecp-agent
+chmod 440 /etc/sudoers.d/ecp-agent
+# 2) 设置 VNC 密码
+` + setup + `
+# 3) 启动 VNC
+` + startCmd + `
+echo "VNC 已启动，端口 5900"`
+	r.PrivilegeHint = "首次启动请在节点 sudo 执行一次（自动配置免密 sudo + VNC 密码设为 orangepi），之后平台全自动"
 	return r
 }
 
