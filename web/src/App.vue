@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
+import { api } from '@/api/client'
 
 const route = useRoute()
 
@@ -21,6 +22,36 @@ const activePath = computed(() => {
   if (p.startsWith('/audit')) return '/audit'
   return p
 })
+
+// 紧急通道状态指示（relay 在线时显示）
+const relayEnabled = ref(false)
+const relayOnline = ref(false)
+let timer: ReturnType<typeof setInterval> | undefined
+
+async function refreshRelayState() {
+  if (!localStorage.getItem('ecp_token')) return
+  try {
+    const cfg = await api.getRelayConfig()
+    relayEnabled.value = !!cfg.enabled
+    if (cfg.enabled) {
+      // 触发连接（若未连）
+      const { relay } = await import('@/api/relay')
+      relay.onStatusChange = () => {
+        relayOnline.value = relay.isOnline()
+      }
+      relay.setConfig(cfg)
+      relayOnline.value = relay.isOnline()
+    }
+  } catch {
+    relayEnabled.value = false
+  }
+}
+
+onMounted(() => {
+  if (localStorage.getItem('ecp_token')) refreshRelayState()
+  timer = setInterval(refreshRelayState, 30000)
+})
+onUnmounted(() => clearInterval(timer))
 </script>
 
 <template>
@@ -47,6 +78,10 @@ const activePath = computed(() => {
       <div class="sidebar-footer">
         <div>Tailscale 自组网</div>
         <div class="mono">immml@ · 已连接</div>
+        <div v-if="relayEnabled" class="relay-status" :class="{ online: relayOnline }">
+          <span class="relay-dot" />
+          紧急通道 {{ relayOnline ? '在线' : '连接中…' }}
+        </div>
       </div>
     </aside>
 

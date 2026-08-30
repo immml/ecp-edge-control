@@ -217,6 +217,46 @@ class ApiClient {
     return r
   }
 
+  /**
+   * 紧急通道配置：登录后调用，返回 relay 连接参数（url + gui_token）。
+   * server 未启用 relay 时返回 enabled=false，前端不做任何连接。
+   */
+  async getRelayConfig(): Promise<{ enabled: boolean; url: string; gui_token: string }> {
+    return this.request('GET', 'api/v1/relay/config')
+  }
+
+  /** 经紧急通道（relay）执行指令：主通道失败时自动降级。 */
+  async execCommandRelay(nodeId: string, type: string, params?: Record<string, unknown>): Promise<CommandResult> {
+    const { relay, b64decode } = await import('./relay')
+    if (!relay.isEnabled() || !relay.isOnline()) {
+      throw new Error('紧急通道不可用')
+    }
+    const frame = await relay.execCommand(nodeId, type, params)
+    const res = frame.result || { status: 0, message: '无回执' }
+    return {
+      status: Number(res.status) || 0,
+      message: res.message || '',
+      stdout: res.stdout ? b64decode(res.stdout) : '',
+      stderr: res.stderr ? b64decode(res.stderr) : '',
+      exit_code: res.exit_code ?? 0,
+      privilege_script: res.privilege_script || '',
+      privilege_hint: res.privilege_hint || '',
+    } as unknown as CommandResult
+  }
+
+  /** 统一入口：优先主通道，失败自动降级紧急通道（仅当 relay 已启用）。 */
+  async execCommandAuto(nodeId: string, type: string, params?: Record<string, unknown>): Promise<CommandResult> {
+    try {
+      return await this.execCommand(nodeId, type, params)
+    } catch (e) {
+      const { relay } = await import('./relay')
+      if (relay.isEnabled() && relay.isOnline()) {
+        return this.execCommandRelay(nodeId, type, params)
+      }
+      throw e
+    }
+  }
+
   async batchCommand(nodeIds: string[], type: string, params?: Record<string, unknown>): Promise<{ total: number; results: BatchResult[] }> {
     return this.request('POST', 'api/v1/nodes/batch/command', { node_ids: nodeIds, type, params })
   }

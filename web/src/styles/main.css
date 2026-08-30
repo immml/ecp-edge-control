@@ -148,6 +148,30 @@ body {
   line-height: 1.7;
 }
 
+.relay-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--text-tertiary, #999);
+}
+
+.relay-status.online {
+  color: var(--color-success, #67c23a);
+}
+
+.relay-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-tertiary, #999);
+  flex-shrink: 0;
+}
+
+.relay-status.online .relay-dot {
+  background: var(--color-success, #67c23a);
+}
+
 .main {
   flex: 1;
   display: flex;

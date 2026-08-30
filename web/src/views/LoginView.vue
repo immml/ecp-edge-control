@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { auth } from '@/stores/auth'
+import { api } from '@/api/client'
 
 const router = useRouter()
 const username = ref('')
@@ -19,6 +20,14 @@ async function onSubmit() {
   loading.value = true
   try {
     await auth.login(username.value, password.value)
+    // 紧急通道：登录后拉取 relay 配置并建立降级连接（未启用则静默跳过）
+    try {
+      const cfg = await api.getRelayConfig()
+      const { relay } = await import('@/api/relay')
+      relay.setConfig(cfg.enabled ? cfg : null)
+    } catch {
+      // relay 配置拉取失败不影响主流程
+    }
     ElMessage.success('登录成功')
     router.replace('/nodes')
   } catch (e) {

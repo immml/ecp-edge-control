@@ -84,14 +84,21 @@ export class Room {
     this.conns.push(ws)
     this.lastAgentPing = Date.now()
     this.armHeartbeatAlarm()
+    console.log('[room] agent attached', { room: this.name })
 
     // 补发离线期间暂存的指令
     this.flushOffline(ws)
   }
 
+  private get name(): string {
+    // DO 实例名（node_id）；仅用于日志
+    return this.state.id.toString()
+  }
+
   private attachGui(ws: WebSocket): void {
     this.guiWs.add(ws)
     this.conns.push(ws)
+    console.log('[room] gui attached', { room: this.name, guis: this.guiWs.size })
   }
 
   // ---- 消息处理（acceptWebSocket 后由运行时驱动事件回调） ----
@@ -110,6 +117,7 @@ export class Room {
     }
 
     const isFromAgent = ws === this.agentWs
+    console.log('[room] msg', { type: frame.type, fromAgent: isFromAgent, room: this.name })
 
     switch (frame.type) {
       case 'ping':

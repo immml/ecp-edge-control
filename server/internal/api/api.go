@@ -83,6 +83,8 @@ func New(st *store.Store, sessions *session.Manager, dispatch *command.Dispatche
 	api.Use(h.JWTAuth())
 	{
 		api.GET("/me", h.Me)
+		// 紧急通道配置（relay）：登录后下发，前端据此建立降级通道
+		api.GET("/relay/config", h.RelayConfig)
 		api.GET("/nodes", h.ListNodes)
 		api.GET("/nodes/:id", h.GetNode)
 		api.GET("/nodes/:id/telemetry", h.NodeTelemetry)
