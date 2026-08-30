@@ -119,6 +119,9 @@ enum CommandType {
   COMMAND_TYPE_AGENT_UPGRADE = 17;        // 需提权
   COMMAND_TYPE_ALERT_RULE_SYNC = 18;      // 下发告警规则到节点本地
   COMMAND_TYPE_LOG_QUERY = 19;            // 查询节点日志文件
+  COMMAND_TYPE_FRP_STATUS = 20;           // 查询 frpc 状态（二进制/进程/配置）
+  COMMAND_TYPE_FRP_UP = 21;               // 启动 frpc（需提权）
+  COMMAND_TYPE_FRP_DOWN = 22;             // 停止 frpc（需提权）
 }
 
 message Command {

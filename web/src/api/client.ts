@@ -117,6 +117,7 @@ export interface CommandResult {
   message: string
   stdout: string
   privilege_hint?: string
+  privilege_script?: string
 }
 
 class ApiClient {

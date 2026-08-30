@@ -45,6 +45,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/AuditView.vue'),
     meta: { title: '审计日志', icon: 'Document' },
   },
+  {
+    path: '/network',
+    name: 'network',
+    component: () => import('@/views/NetworkView.vue'),
+    meta: { title: '组网管理', icon: 'Connection' },
+  },
 ]
 
 const router = createRouter({
