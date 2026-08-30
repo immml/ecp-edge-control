@@ -21,7 +21,10 @@
 package executor
 
 import (
+	"bytes"
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"encoding/json"
 	"fmt"
@@ -318,15 +321,20 @@ XRAY=$DIR/xray
 CONF=/etc/ecp-xray/config-${INST}.json
 UNIT=ecp-xray-${INST}.service
 
-# 1) xray 二进制（arm64/amd64）
+# 1) xray 二进制（arm64/amd64；Xray-core 新版资产名带后缀）
 if [[ ! -x $XRAY ]]; then
-  ARCH=$(uname -m); [[ $ARCH == aarch64 ]] && ARCH=arm64; [[ $ARCH == x86_64 ]] && ARCH=amd64
+  M=$(uname -m)
+  case $M in
+    aarch64|arm64) FX="arm64-v8a" ;;
+    x86_64|amd64) FX="64" ;;
+    *) FX=""; echo "UNSUPPORTED_ARCH: $M"; exit 4 ;;
+  esac
   VER=$(curl -fsSL --max-time 20 https://api.github.com/repos/XTLS/Xray-core/releases/latest 2>/dev/null | grep -oE '"tag_name": *"[^"]+"' | head -1 | cut -d'"' -f4)
   VER=${VER:-v26.3.27}
-  URL="https://github.com/XTLS/Xray-core/releases/download/${VER}/Xray-linux-${ARCH}.zip"
+  URL="https://github.com/XTLS/Xray-core/releases/download/${VER}/Xray-linux-${FX}.zip"
   TMP=$(mktemp -d)
   if ! curl -fsSL --max-time 150 "$URL" -o "$TMP/x.zip"; then
-    echo "DOWNLOAD_FAIL: version=${VER} arch=${ARCH} 节点无法访问 GitHub 下载，请手动下载 $URL 解压 xray 到 $XRAY 后重跑"; exit 2
+    echo "DOWNLOAD_FAIL: version=${VER} file=Xray-linux-${FX}.zip 节点无法访问 GitHub 下载，请手动下载 $URL 解压 xray 到 $XRAY 后重跑"; exit 2
   fi
   mkdir -p "$DIR"
   (cd "$TMP" && unzip -oq x.zip && (cp xray "$XRAY" 2>/dev/null || cp Xray "$XRAY" 2>/dev/null))
@@ -480,11 +488,22 @@ func (e *Executor) cmdPriv(cmd *ecpv1.Command, timeout time.Duration, script str
 		if err := os.Chmod(tmpPath, 0o600); err != nil {
 			return e.fail(cmd, "设置脚本权限失败: "+errString(err))
 		}
-		out, err := runBin(timeout, "sudo", "-n", "bash", tmpPath)
-		if err != nil {
-			return e.fail(cmd, "部署失败: "+errString(err))
+		// 用 exec.CommandContext 完整采集 stdout+stderr（runBin 失败时只回 stderr，
+		// 会吞掉脚本写 stdout 的诊断信息）
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		proc := exec.CommandContext(ctx, "sudo", "-n", "bash", tmpPath)
+		var so, se bytes.Buffer
+		proc.Stdout = &so
+		proc.Stderr = &se
+		runErr := proc.Run()
+		if runErr != nil {
+			if ctx.Err() == context.DeadlineExceeded {
+				return e.fail(cmd, "部署超时: "+runErr.Error()+"\n"+se.String()+so.String())
+			}
+			return e.fail(cmd, "部署失败: "+runErr.Error()+"\n"+strings.TrimSpace(se.String())+so.String())
 		}
-		return e.textResult(cmd, string(out))
+		return e.textResult(cmd, so.String())
 	}
 	r := e.base(cmd)
 	r.Status = ecpv1.ResultStatus_RESULT_STATUS_NEEDS_PRIVILEGE

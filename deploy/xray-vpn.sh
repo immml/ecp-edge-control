@@ -57,12 +57,17 @@ UNIT=ecp-xray-${INST_SAFE}.service
 
 info "实例: $INST_SAFE | 架构: $ARCH | 端口: 127.0.0.1:$PORT | path: $PATH_WS"
 
-# 1) xray 二进制
+# 1) xray 二进制（arm64/amd64；Xray-core 新版资产名带后缀）
 if [[ ! -x "$XRAY" ]]; then
   info "下载 xray-core (linux/$ARCH)..."
+  case "$ARCH" in
+    arm64) FX="arm64-v8a" ;;
+    amd64) FX="64" ;;
+    *) fail "不支持的架构: $ARCH" ;;
+  esac
   VER=$(curl -fsSL --max-time 20 https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep -oE '"tag_name": *"[^"]+"' | head -1 | cut -d'"' -f4)
   [[ -n "$VER" ]] || VER="v26.3.27"
-  URL="https://github.com/XTLS/Xray-core/releases/download/${VER}/Xray-linux-${ARCH}.zip"
+  URL="https://github.com/XTLS/Xray-core/releases/download/${VER}/Xray-linux-${FX}.zip"
   TMP=$(mktemp -d)
   if ! curl -fsSL --max-time 120 "$URL" -o "$TMP/x.zip"; then
     warn "GitHub 下载失败（国内受限），请手动下载：$URL"
