@@ -51,7 +51,12 @@ func (h *Handler) PanelProxy(c *gin.Context) {
 
 // dialPanelTunnel 为一次反向代理连接建立隧道会话，返回虚拟 net.Conn。
 func (h *Handler) dialPanelTunnel(ctx context.Context, nodeID string) (net.Conn, error) {
-	_, out, write, closeFn, err := h.grpc.OpenTunnelSession(nodeID, panelTarget)
+	return h.dialTunnelTarget(ctx, nodeID, panelTarget)
+}
+
+// dialTunnelTarget 建立到节点指定本地地址的隧道会话（panel 用 31252，VNC 用 5900）。
+func (h *Handler) dialTunnelTarget(ctx context.Context, nodeID, target string) (net.Conn, error) {
+	_, out, write, closeFn, err := h.grpc.OpenTunnelSession(nodeID, target)
 	if err != nil {
 		return nil, err
 	}

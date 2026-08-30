@@ -125,6 +125,9 @@ enum CommandType {
   COMMAND_TYPE_FRP_CONFIG_GET = 23;       // 读取 frpc 配置（frpc.ini / frpc.toml）
   COMMAND_TYPE_FRP_CONFIG_SET = 24;       // 写入/修改 frpc 配置（需提权）
   COMMAND_TYPE_TAILSCALE_LOGIN_URL = 25;  // 触发交互登录并返回 login URL（新标签页打开认证）
+  COMMAND_TYPE_VNC_STATUS = 26;           // 探测 VNC（二进制/监听端口/密码状态）
+  COMMAND_TYPE_VNC_START = 27;            // 启动 VNC server（需提权/首次设密码）
+  COMMAND_TYPE_VNC_STOP = 28;             // 停止 VNC server（需提权）
 }
 
 message Command {

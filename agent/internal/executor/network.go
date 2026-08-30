@@ -248,19 +248,26 @@ func frpTunnels(path string, timeout time.Duration) []string {
 
 // frpConfigGet 读取指定实例的配置文件内容（只读）。
 //
-// 参数：instance（默认 default）；若无配置文件则返回空并提示。
+// 参数：instance（默认 default）；若无配置文件则返回空内容 + message 标注
+// "path=...; NEW=1"（文件不存在，将创建新文件）。
 func (e *Executor) frpConfigGet(cmd *ecpv1.Command) *ecpv1.CommandResult {
 	timeout := dur(cmd.GetTimeoutSec(), 15)
 	inst := getString(cmd.GetParams(), "instance")
-	path := e.resolveFrpConf(inst, timeout)
+	path, isNew := e.resolveFrpConf(inst, timeout)
 	if path == "" {
 		r := e.base(cmd)
 		r.Status = ecpv1.ResultStatus_RESULT_STATUS_OK
-		r.Message = "未找到 frpc 配置文件（/etc/frp/frpc.ini 等），可先新增隧道生成"
+		r.Message = "未找到 frpc 配置文件（推断路径失败）"
+		return r
+	}
+	r := e.base(cmd)
+	if isNew {
+		// 文件不存在：返回空 stdout + 明确标记 NEW + 推断路径
+		r.Status = ecpv1.ResultStatus_RESULT_STATUS_OK
+		r.Message = "path=" + path + "; NEW=1"
 		return r
 	}
 	out, err := runBin(timeout, "sh", "-c", "cat "+path)
-	r := e.base(cmd)
 	r.Stdout = out
 	if err != nil {
 		r.Status = ecpv1.ResultStatus_RESULT_STATUS_FAILED
@@ -283,7 +290,7 @@ func (e *Executor) frpConfigSet(cmd *ecpv1.Command) *ecpv1.CommandResult {
 	if inst == "" {
 		inst = "default"
 	}
-	path := e.resolveFrpConf(inst, timeout)
+	path, _ := e.resolveFrpConf(inst, timeout)
 	if path == "" {
 		path = "/etc/frp/frpc.ini"
 	}
@@ -359,26 +366,34 @@ func buildTunnelBlock(tunnelJSON string) string {
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
-// resolveFrpConf 按实例名定位配置文件。
-func (e *Executor) resolveFrpConf(inst string, timeout time.Duration) string {
-	if inst != "" && inst != "default" {
-		for _, p := range []string{
-			"/etc/frp/frpc-" + inst + ".ini",
-			"/etc/frp/" + inst + ".ini",
-			"/etc/frpc-" + inst + ".ini",
-		} {
-			if o, err := runBin(timeout, "sh", "-c", "[ -f "+p+" ] && echo 1 || echo 0"); err == nil && strings.TrimSpace(string(o)) == "1" {
-				return p
+// resolveFrpConf 按实例名定位配置文件；找不到时返回推断的默认路径（按实例名生成）
+// ——以便 frpConfigSet 能为"命令行启动"的实例（ChmlFrp/HayFRP 等）创建新的 frpc.ini。
+// 返回值末尾 +"|NEW" 表示文件不存在（new=true），无后缀表示已存在。
+func (e *Executor) resolveFrpConf(inst string, timeout time.Duration) (path string, newFile bool) {
+	candidates := func() []string {
+		if inst != "" && inst != "default" {
+			return []string{
+				"/etc/frp/frpc-" + inst + ".ini",
+				"/etc/frp/" + inst + ".ini",
+				"/etc/frpc-" + inst + ".ini",
 			}
 		}
-		return ""
-	}
-	for _, p := range frpConfCandidates() {
+		return frpConfCandidates()
+	}()
+	for _, p := range candidates {
 		if o, err := runBin(timeout, "sh", "-c", "[ -f "+p+" ] && echo 1 || echo 0"); err == nil && strings.TrimSpace(string(o)) == "1" {
-			return p
+			return p, false
 		}
 	}
-	return ""
+	// 都没找到：返回推断路径（第一个候选）
+	if inst != "" && inst != "default" {
+		return candidates[0], true
+	}
+	// default 实例：返回 /etc/frp/frpc.ini 作为推断路径
+	for _, p := range frpConfCandidates() {
+		return p, true
+	}
+	return "", true
 }
 
 // frpUp 启动指定实例的 frpc（需 root）。免密 sudo 可用则直接执行，否则降级脚本。

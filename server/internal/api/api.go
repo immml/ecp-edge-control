@@ -65,8 +65,9 @@ func New(st *store.Store, sessions *session.Manager, dispatch *command.Dispatche
 	r.Use(gin.Recovery())
 
 	r.POST("/api/v1/login", h.Login)
-	// WebSocket 无法携带 Authorization header，终端走 query token 自校验
+	// WebSocket 无法携带 Authorization header，终端/VNC 走 query token 自校验
 	r.GET("/api/v1/nodes/:id/terminal/ws", h.TerminalWS)
+	r.GET("/api/v1/nodes/:id/vnc/ws", h.VncWS)
 	// 1Panel 内置流量：浏览器只连控制台，经隧道转发到节点本地 31252。
 	// 免鉴权（控制台仅本机监听；代理不绕过 1Panel 自身登录鉴权）。
 	r.Any("/api/v1/nodes/:id/panel/*path", h.PanelProxy)
@@ -433,6 +434,7 @@ func statusOf(online bool) string {
 func commandType(s string) ecpv1.CommandType {
 	norm := strings.ToUpper(strings.TrimPrefix(s, "COMMAND_TYPE_"))
 	for _, t := range []ecpv1.CommandType{
+		ecpv1.CommandType_COMMAND_TYPE_SHELL,
 		ecpv1.CommandType_COMMAND_TYPE_FILE_LIST,
 		ecpv1.CommandType_COMMAND_TYPE_FILE_READ,
 		ecpv1.CommandType_COMMAND_TYPE_FILE_WRITE,
@@ -457,6 +459,9 @@ func commandType(s string) ecpv1.CommandType {
 		ecpv1.CommandType_COMMAND_TYPE_FRP_CONFIG_GET,
 		ecpv1.CommandType_COMMAND_TYPE_FRP_CONFIG_SET,
 		ecpv1.CommandType_COMMAND_TYPE_TAILSCALE_LOGIN_URL,
+		ecpv1.CommandType_COMMAND_TYPE_VNC_STATUS,
+		ecpv1.CommandType_COMMAND_TYPE_VNC_START,
+		ecpv1.CommandType_COMMAND_TYPE_VNC_STOP,
 	} {
 		if strings.TrimPrefix(t.String(), "COMMAND_TYPE_") == norm {
 			return t
