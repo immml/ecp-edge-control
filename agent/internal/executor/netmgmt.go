@@ -35,6 +35,7 @@ import (
 	"time"
 
 	ecpv1 "ecp.dev/ecp/proto/gen/ecp/v1"
+	"ecp.dev/ecp/agent/internal/wifimgr"
 )
 
 // speedtestBin 测速二进制候选路径（pip 安装的独立二进制）。
@@ -75,6 +76,26 @@ func (e *Executor) netGet(cmd *ecpv1.Command) *ecpv1.CommandResult {
 		return e.textResult(cmd, text)
 	case "wifi_status":
 		return e.netRun(cmd, timeout, "nmcli", "-t", "-f", "SSID,SIGNAL,CHAN,DEVICE", "dev", "wifi", "show")
+	case "wifi_quality":
+		// 信道扫描 + 评估报告（JSON）：iw 优先，nmcli 降级。
+		// 结果结构见 wifimgr.AssessReport，前端直接消费。
+		iface := getString(cmd.GetParams(), "iface")
+		wm := wifimgr.Default()
+		rep, err := wm.Assess(iface)
+		if err != nil {
+			return e.fail(cmd, err.Error())
+		}
+		data, jerr := json.Marshal(rep)
+		if jerr != nil {
+			return e.fail(cmd, "评估结果序列化失败: "+jerr.Error())
+		}
+		return e.textResult(cmd, string(data))
+	case "wifi_guard_status":
+		st, err := json.Marshal(wifimgr.Default().Status())
+		if err != nil {
+			return e.fail(cmd, "状态序列化失败: "+err.Error())
+		}
+		return e.textResult(cmd, string(st))
 	case "channel":
 		iface := getString(cmd.GetParams(), "iface")
 		if iface == "" {
@@ -328,6 +349,33 @@ func (e *Executor) netSet(cmd *ecpv1.Command) *ecpv1.CommandResult {
 		// 远程部署 xray VPN 跳板（本节点 = 一个独立出口）。
 		// 免密 sudo 自动执行；否则 NEEDS_PRIVILEGE 返回脚本供人工粘贴执行。
 		return e.cmdPriv(cmd, timeout, vpnDeployScript())
+	case "wifi_guard_config":
+		// 自动切换引擎配置（白名单/阈值/开关）。params.config 为完整 JSON：
+		// {"enabled":false,"threshold":-75,"min_margin":8,"interval_sec":60,
+		//  "check_gateway":"","whitelist":[{"ssid":"X","password":"..."}]}
+		raw := getString(cmd.GetParams(), "config")
+		if raw == "" {
+			return e.fail(cmd, "缺少 config 参数")
+		}
+		if err := wifimgr.Default().ApplyConfig(raw); err != nil {
+			return e.fail(cmd, err.Error())
+		}
+		return e.textResult(cmd, "自动切换配置已保存并生效")
+	case "wifi_switch":
+		// 手动切换到备选网络：params.ssid（须在白名单内；密码缺省用白名单记录）。
+		// 不越过白名单——防钓鱼与误操作的红线。
+		ssid := getString(cmd.GetParams(), "ssid")
+		if ssid == "" {
+			return e.fail(cmd, "缺少 ssid 参数")
+		}
+		wm := wifimgr.Default()
+		if !wm.InWhitelist(ssid) {
+			return e.fail(cmd, "SSID 不在自动切换白名单内，拒绝切换（请先配置白名单）")
+		}
+		if err := wm.SwitchTo(ssid, ""); err != nil {
+			return e.fail(cmd, err.Error())
+		}
+		return e.textResult(cmd, "已切换到 "+ssid)
 	default:
 		return e.fail(cmd, "未知 net_set action: "+action)
 	}
@@ -384,7 +432,7 @@ cat > "$CONF" <<JSON
   "routing": {
     "rules": [
       { "type": "field", "protocol": ["bittorrent"], "outboundTag": "block" },
-      { "type": "field", "ip": ["geoip:private"], "outboundTag": "direct" }
+      { "type": "field", "ip": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "127.0.0.0/8"], "outboundTag": "direct" }
     ]
   }
 }

@@ -32,6 +32,10 @@ const routes: RouteRecordRaw[] = [
     redirect: (to) => `/nodes/${to.params.id}?tab=network`,
   },
   {
+    path: '/nodes/:id/wifi',
+    redirect: (to) => `/nodes/${to.params.id}?tab=wifi`,
+  },
+  {
     path: '/nodes/:id/files',
     name: 'files',
     component: () => import('@/views/FilesView.vue'),

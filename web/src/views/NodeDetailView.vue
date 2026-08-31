@@ -9,6 +9,7 @@ import { formatBytes, percent, timeAgo } from '@/utils/format'
 import NetworkPanel from '@/components/NetworkPanel.vue'
 import NodeMeshPanel from '@/components/NodeMeshPanel.vue'
 import NodeVpnPanel from '@/components/NodeVpnPanel.vue'
+import WifiPanel from '@/components/WifiPanel.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -18,7 +19,7 @@ const loading = ref(true)
 const node = ref<any>(null)
 const online = ref(false)
 const history = ref<TelemetrySample[]>([]) // 升序（旧→新）
-const detailTab = ref('overview') // overview / net / mesh / vpn
+const detailTab = ref('overview') // overview / net / mesh / vpn / wifi
 
 // OTA 升级
 const upgradeVisible = ref(false)
@@ -86,6 +87,7 @@ onMounted(() => {
   if (t === 'network' || t === 'net') detailTab.value = 'net'
   if (t === 'mesh') detailTab.value = 'mesh'
   if (t === 'vpn') detailTab.value = 'vpn'
+  if (t === 'wifi') detailTab.value = 'wifi'
   load()
   timer = window.setInterval(load, 15000)
 })
@@ -292,6 +294,11 @@ function openPanel() {
       <!-- ============ VPN 跳板（本节点） ============ -->
       <el-tab-pane label="VPN 跳板" name="vpn">
         <NodeVpnPanel v-if="node" :node="node" />
+      </el-tab-pane>
+
+      <!-- ============ 无线网络（信道评估/切换） ============ -->
+      <el-tab-pane label="无线网络" name="wifi">
+        <WifiPanel v-if="node" :node="node" />
       </el-tab-pane>
     </el-tabs>
   </div>

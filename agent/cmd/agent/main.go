@@ -23,6 +23,7 @@ import (
 	"ecp.dev/ecp/agent/internal/config"
 	"ecp.dev/ecp/agent/internal/relay"
 	"ecp.dev/ecp/agent/internal/transport"
+	"ecp.dev/ecp/agent/internal/wifimgr"
 	ecpv1 "ecp.dev/ecp/proto/gen/ecp/v1"
 )
 
@@ -141,6 +142,13 @@ func cmdRun(args []string) {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	// WiFi 管理引擎（扫描/信道评估/自动切换）：agent 自治运行，
+	// 控制面离线期间按最后下发的白名单与阈值继续工作。
+	wm := wifimgr.Configure(cfg.Agent.ConfigDir, "")
+	go wm.Run(ctx)
+	fmt.Printf("  WiFi 管理引擎: 已启动（自动切换=%v，白名单=%d）\n",
+		wm.Status().Enabled, len(wm.Status().Whitelist))
 
 	tr := transport.New(cfg, log, c)
 	// 紧急通道（Cloudflare Worker 中转）：配置启用时独立协程常驻，
