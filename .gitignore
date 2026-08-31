@@ -113,3 +113,6 @@ worker/dist/
 
 # 本地工具缓存（protoc 等，可随时重新下载）
 .toolcache/
+
+# OPi 重装备份（含私钥，勿入库）
+docs/Backup-OPi-*/
